@@ -6,13 +6,13 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@supabase/auth-helpers-nextjs": "latest",
     "@supabase/supabase-js": "latest",
     "next": "latest",
     "react": "latest",
     "react-dom": "latest",
     "papaparse": "latest",
-    "zod": "latest"
+    "zod": "latest",
+    "@supabase/ssr": "latest"
   },
   "devDependencies": {
     "@types/node": "latest",
@@ -24,6 +24,7 @@
     "eslint-config-next": "latest",
     "postcss": "latest",
     "tailwindcss": "latest",
-    "typescript": "latest"
+    "typescript": "latest",
+    "@tailwindcss/postcss": "latest"
   }
 }

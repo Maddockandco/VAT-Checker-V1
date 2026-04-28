@@ -95,3 +95,26 @@ Before client use, add:
 - Add client invitation emails
 - Add PDF VAT threshold report
 - Add Xero OAuth integration first
+
+
+## Vercel deployment build fixes included in this version
+
+This fixed package updates the two areas that caused the Vercel build to fail:
+
+1. Tailwind/PostCSS
+   - Uses `@tailwindcss/postcss`
+   - Updates `postcss.config.mjs`
+
+2. Supabase
+   - Removes deprecated `@supabase/auth-helpers-nextjs`
+   - Uses `@supabase/ssr` for browser login
+   - Uses `@supabase/supabase-js` for server/API routes
+
+## How to redeploy
+
+1. Delete the old files in your GitHub repository.
+2. Upload the contents of this fixed project folder.
+3. Commit the changes.
+4. Go to Vercel and click Redeploy.
+
+Make sure `package.json` is at the root of the repository.
