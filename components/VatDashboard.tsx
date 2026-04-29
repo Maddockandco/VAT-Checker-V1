@@ -183,7 +183,7 @@ export default function VatDashboard() {
         <header className="mb-6 rounded-3xl bg-blue-950 p-6 text-white shadow-xl">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-sm uppercase tracking-[0.3em] text-blue-100">Maddock & Co.</p>
+              <p className="text-sm text-blue-100">Provided by Maddock & Co.</p>
               <h1 className="mt-2 text-3xl font-bold md:text-4xl">VAT Registration Checker</h1>
               <p className="mt-2 max-w-2xl text-blue-100">Free UK VAT threshold monitoring tool for rolling 12-month taxable turnover reviews.</p>
             </div>
