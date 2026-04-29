@@ -27,7 +27,7 @@ const initialMonths = [
   { month: "Apr 2026", standardRated: 10750, reducedRated: 0, zeroRated: 0, exempt: 0, outOfScope: 0 },
 ];
 
-function currency(value) {
+function currency(value: number) {
   const amount = Number(value || 0);
   return new Intl.NumberFormat("en-GB", {
     style: "currency",
@@ -36,7 +36,7 @@ function currency(value) {
   }).format(amount);
 }
 
-function taxableTurnover(row) {
+function taxableTurnover(row: any) {
   return (
     Number(row.standardRated || 0) +
     Number(row.reducedRated || 0) +
@@ -44,7 +44,7 @@ function taxableTurnover(row) {
   );
 }
 
-function getRisk(total) {
+function getRisk(total: number) {
   const percentage = total / VAT_THRESHOLD;
 
   if (total >= VAT_THRESHOLD) {
