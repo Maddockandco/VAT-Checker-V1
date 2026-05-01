@@ -180,17 +180,37 @@ export default function VatDashboard() {
   return (
     <main className="min-h-screen bg-slate-50 text-slate-900">
       <div className="mx-auto max-w-7xl p-4 md:p-8">
-        <header className="mb-6 rounded-3xl bg-blue-950 p-6 text-white shadow-xl">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p className="text-sm text-blue-100">Provided by Maddock & Co.</p>
-              <h1 className="mt-2 text-3xl font-bold md:text-4xl">VAT Registration Checker</h1>
-              <p className="mt-2 max-w-2xl text-blue-100">Free UK VAT threshold monitoring tool for rolling 12-month taxable turnover reviews.</p>
+        <header className="relative mb-6 overflow-hidden rounded-3xl bg-gradient-to-br from-blue-950 via-slate-900 to-blue-900 p-6 text-white shadow-2xl md:p-8">
+          <div className="absolute -right-20 -top-20 h-56 w-56 rounded-full bg-white/10 blur-2xl" />
+          <div className="absolute -bottom-24 left-1/3 h-56 w-56 rounded-full bg-blue-400/10 blur-2xl" />
+
+          <div className="relative flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+            <div className="max-w-3xl">
+              <div className="inline-flex items-center rounded-full border border-white/15 bg-white/10 px-4 py-2 text-sm font-medium text-blue-50 shadow-sm backdrop-blur">
+                Provided by Maddock & Co.
+              </div>
+
+              <h1 className="mt-5 text-4xl font-bold tracking-tight md:text-5xl">
+                VAT Registration Checker
+              </h1>
+
+              <p className="mt-4 max-w-2xl text-base leading-7 text-blue-50 md:text-lg">
+                Monitor rolling 12-month taxable turnover, identify VAT registration risk early, and keep a clear adviser review record.
+              </p>
+
+              <div className="mt-6 flex flex-wrap gap-3 text-sm">
+                <span className="rounded-full bg-white/10 px-4 py-2 text-blue-50 ring-1 ring-white/10">Rolling 12-month test</span>
+                <span className="rounded-full bg-white/10 px-4 py-2 text-blue-50 ring-1 ring-white/10">30-day forward look</span>
+                <span className="rounded-full bg-white/10 px-4 py-2 text-blue-50 ring-1 ring-white/10">Client review note</span>
+              </div>
             </div>
-            <div className="rounded-2xl border border-white/10 bg-white/10 p-4 text-sm">
-              <div>Registration threshold</div>
-              <div className="text-2xl font-semibold">{currency(VAT_THRESHOLD)}</div>
-              <div className="mt-1 text-blue-100">Deregistration: {currency(DEREGISTRATION_THRESHOLD)}</div>
+
+            <div className="rounded-3xl border border-white/15 bg-white/10 p-5 text-sm shadow-xl backdrop-blur md:min-w-64">
+              <div className="text-blue-100">Current UK VAT threshold</div>
+              <div className="mt-2 text-4xl font-bold">{currency(VAT_THRESHOLD)}</div>
+              <div className="mt-3 rounded-2xl bg-white/10 p-3 text-blue-50">
+                Deregistration threshold: <span className="font-semibold">{currency(DEREGISTRATION_THRESHOLD)}</span>
+              </div>
             </div>
           </div>
         </header>
