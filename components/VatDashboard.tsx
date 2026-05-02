@@ -27,7 +27,9 @@ type MonthRow = {
 export default function VatDashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loginMessage, setLoginMessage] = useState("");
+  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
 
   const [firmName, setFirmName] = useState("Maddock & Co.");
   const [clientName, setClientName] = useState("");
@@ -68,7 +70,7 @@ export default function VatDashboard() {
     };
   }, []);
 
-  async function sendLoginLink() {
+  async function signUp() {
     setLoginMessage("");
 
     if (!supabase) {
@@ -76,17 +78,14 @@ export default function VatDashboard() {
       return;
     }
 
-    if (!email.trim()) {
-      setLoginMessage("Please enter your email address.");
+    if (!email.trim() || !password.trim()) {
+      setLoginMessage("Please enter email and password.");
       return;
     }
 
-    const { error } = await supabase.auth.signInWithOtp({
+    const { data, error } = await supabase.auth.signUp({
       email,
-      options: {
-        emailRedirectTo:
-          typeof window !== "undefined" ? window.location.origin : undefined,
-      },
+      password,
     });
 
     if (error) {
@@ -94,7 +93,41 @@ export default function VatDashboard() {
       return;
     }
 
-    setLoginMessage("Check your email for the secure login link.");
+    if (data.user) {
+      setUser(data.user);
+      setLoginMessage("Account created and signed in.");
+    } else {
+      setLoginMessage("Account created. Please sign in.");
+    }
+  }
+
+  async function signIn() {
+    setLoginMessage("");
+
+    if (!supabase) {
+      setLoginMessage("Supabase is not connected.");
+      return;
+    }
+
+    if (!email.trim() || !password.trim()) {
+      setLoginMessage("Please enter email and password.");
+      return;
+    }
+
+    const { data, error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      setLoginMessage(error.message);
+      return;
+    }
+
+    if (data.user) {
+      setUser(data.user);
+      setLoginMessage("");
+    }
   }
 
   async function signOut() {
@@ -117,7 +150,6 @@ export default function VatDashboard() {
     0
   );
 
-  const percentageUsed = (taxableTotal / VAT_THRESHOLD) * 100;
   const remaining = VAT_THRESHOLD - taxableTotal;
 
   const risk =
@@ -149,7 +181,7 @@ export default function VatDashboard() {
 
     setSaving(true);
 
-    const { data: profile } = await supabase
+    const { data: profile, error: profileError } = await supabase
       .from("user_profiles")
       .upsert({
         id: user.id,
@@ -159,9 +191,9 @@ export default function VatDashboard() {
       .select()
       .single();
 
-    if (!profile) {
+    if (profileError || !profile) {
       setSaving(false);
-      setMessage("Could not create user profile.");
+      setMessage(`Profile save failed: ${profileError?.message || "Unknown error"}`);
       return;
     }
 
@@ -259,7 +291,24 @@ export default function VatDashboard() {
           </div>
 
           <div className="rounded-3xl bg-white p-6 shadow">
-            <h2 className="mb-4 text-xl font-semibold">Sign in</h2>
+            <div className="mb-4 flex gap-2 rounded-xl bg-slate-100 p-1">
+              <button
+                onClick={() => setAuthMode("signin")}
+                className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold ${
+                  authMode === "signin" ? "bg-white shadow" : "text-slate-600"
+                }`}
+              >
+                Sign in
+              </button>
+              <button
+                onClick={() => setAuthMode("signup")}
+                className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold ${
+                  authMode === "signup" ? "bg-white shadow" : "text-slate-600"
+                }`}
+              >
+                Create account
+              </button>
+            </div>
 
             <label className="block text-sm font-medium">Email address</label>
             <input
@@ -270,11 +319,20 @@ export default function VatDashboard() {
               onChange={(e) => setEmail(e.target.value)}
             />
 
+            <label className="block text-sm font-medium">Password</label>
+            <input
+              type="password"
+              className="mb-4 mt-1 w-full rounded-xl border p-3"
+              placeholder="Enter password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+
             <button
-              onClick={sendLoginLink}
+              onClick={authMode === "signin" ? signIn : signUp}
               className="w-full rounded-xl bg-blue-950 px-4 py-3 font-semibold text-white"
             >
-              Send secure login link
+              {authMode === "signin" ? "Sign in" : "Create account"}
             </button>
 
             {loginMessage && (
