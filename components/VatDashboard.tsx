@@ -31,16 +31,20 @@ export default function VatDashboard() {
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const [months, setMonths] = useState<MonthRow[]>(
-    Array.from({ length: 12 }, (_, i) => ({
-      month: `Month ${i + 1}`,
-      standard: 0,
-      reduced: 0,
-      zero: 0,
-      exempt: 0,
-      out: 0,
-    }))
-  );
+  const [months, setMonths] = useState<MonthRow[]>([
+    { month: "May 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Jun 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Jul 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Aug 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Sep 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Oct 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Nov 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Dec 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Jan 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Feb 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Mar 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+    { month: "Apr 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  ]);
 
   function updateValue(index: number, field: VatField, value: number) {
     const updated = [...months];
@@ -55,6 +59,9 @@ export default function VatDashboard() {
     (sum, m) => sum + m.standard + m.reduced + m.zero,
     0
   );
+
+  const percentageUsed = (taxableTotal / VAT_THRESHOLD) * 100;
+  const remaining = VAT_THRESHOLD - taxableTotal;
 
   const risk =
     taxableTotal >= VAT_THRESHOLD
@@ -80,19 +87,13 @@ export default function VatDashboard() {
 
     setSaving(true);
 
-    const { data: firm, error: firmError } = await supabase
+    const { data: firm } = await supabase
       .from("firms")
       .insert({ name: firmName })
       .select()
       .single();
 
-    if (firmError || !firm) {
-      setSaving(false);
-      setMessage(`Firm save failed: ${firmError?.message || "Unknown error"}`);
-      return;
-    }
-
-    const { data: client, error: clientError } = await supabase
+    const { data: client } = await supabase
       .from("clients")
       .insert({
         firm_id: firm.id,
@@ -101,12 +102,6 @@ export default function VatDashboard() {
       })
       .select()
       .single();
-
-    if (clientError || !client) {
-      setSaving(false);
-      setMessage(`Client save failed: ${clientError?.message || "Unknown error"}`);
-      return;
-    }
 
     const entries = months.map((m) => ({
       client_id: client.id,
@@ -118,54 +113,70 @@ export default function VatDashboard() {
       out_of_scope: m.out,
     }));
 
-    const { error: turnoverError } = await supabase
-      .from("turnover_entries")
-      .insert(entries);
+    await supabase.from("turnover_entries").insert(entries);
 
-    if (turnoverError) {
-      setSaving(false);
-      setMessage(`Turnover save failed: ${turnoverError.message}`);
-      return;
-    }
-
-    const { error: reviewError } = await supabase.from("vat_reviews").insert({
+    await supabase.from("vat_reviews").insert({
       client_id: client.id,
       rolling_taxable_turnover: taxableTotal,
       risk_status: risk,
     });
 
     setSaving(false);
-
-    if (reviewError) {
-      setMessage(`Review save failed: ${reviewError.message}`);
-      return;
-    }
-
     setMessage("Saved successfully.");
   }
 
   return (
     <main className="min-h-screen bg-slate-50 p-6">
       <div className="mx-auto max-w-7xl">
+
         <div className="mb-6 rounded-3xl bg-blue-950 p-8 text-white">
           <p>Provided by Maddock & Co.</p>
           <h1 className="text-4xl font-bold">VAT Checker</h1>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-3">
-          <div className="rounded-2xl bg-white p-6 shadow">
-            <h2 className="mb-3 font-bold">Firm</h2>
+        {/* SUMMARY */}
+        <div className="grid gap-6 md:grid-cols-4 mb-6">
+
+          <div className="bg-white p-4 rounded-xl shadow">
+            <p className="text-sm text-gray-500">Taxable Turnover</p>
+            <p className="text-2xl font-bold">£{taxableTotal.toLocaleString()}</p>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl shadow">
+            <p className="text-sm text-gray-500">Threshold</p>
+            <p className="text-2xl font-bold">£90,000</p>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl shadow">
+            <p className="text-sm text-gray-500">Remaining</p>
+            <p className="text-2xl font-bold">
+              £{remaining.toLocaleString()}
+            </p>
+          </div>
+
+          <div className="bg-white p-4 rounded-xl shadow">
+            <p className="text-sm text-gray-500">Risk</p>
+            <p className="text-2xl font-bold">{risk}</p>
+          </div>
+
+        </div>
+
+        {/* CLIENT */}
+        <div className="grid gap-6 md:grid-cols-2 mb-6">
+
+          <div className="bg-white p-6 rounded-2xl shadow">
+            <h2 className="font-bold mb-3">Firm</h2>
             <input
-              className="mb-3 w-full border p-2"
+              className="w-full border p-2"
               value={firmName}
               onChange={(e) => setFirmName(e.target.value)}
             />
           </div>
 
-          <div className="rounded-2xl bg-white p-6 shadow">
-            <h2 className="mb-3 font-bold">Client</h2>
+          <div className="bg-white p-6 rounded-2xl shadow">
+            <h2 className="font-bold mb-3">Client</h2>
             <input
-              className="mb-3 w-full border p-2"
+              className="w-full border p-2 mb-3"
               placeholder="Client name"
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
@@ -178,14 +189,10 @@ export default function VatDashboard() {
             />
           </div>
 
-          <div className="rounded-2xl bg-white p-6 shadow">
-            <h2 className="mb-3 font-bold">VAT Status</h2>
-            <p>Total: £{taxableTotal.toLocaleString()}</p>
-            <p>Status: {risk}</p>
-          </div>
         </div>
 
-        <div className="mt-6 overflow-x-auto rounded-2xl bg-white p-6 shadow">
+        {/* TABLE */}
+        <div className="bg-white p-6 rounded-2xl shadow overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr>
@@ -206,7 +213,7 @@ export default function VatDashboard() {
                       <td key={field}>
                         <input
                           type="number"
-                          className="w-24 border p-1"
+                          className="border p-1 w-24"
                           value={m[field]}
                           onChange={(e) =>
                             updateValue(i, field, Number(e.target.value))
@@ -221,15 +228,16 @@ export default function VatDashboard() {
           </table>
         </div>
 
+        {/* SAVE */}
         <button
           onClick={saveAll}
-          className="mt-6 rounded bg-blue-900 px-6 py-3 text-white"
-          disabled={saving}
+          className="mt-6 bg-blue-900 text-white px-6 py-3 rounded"
         >
-          {saving ? "Saving..." : "Save Full VAT Review"}
+          {saving ? "Saving..." : "Save VAT Review"}
         </button>
 
         {message && <p className="mt-4">{message}</p>}
+
       </div>
     </main>
   );
