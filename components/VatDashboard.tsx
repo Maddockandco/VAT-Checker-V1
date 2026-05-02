@@ -13,6 +13,17 @@ const supabase =
 
 const VAT_THRESHOLD = 90000;
 
+type VatField = "standard" | "reduced" | "zero" | "exempt" | "out";
+
+type MonthRow = {
+  month: string;
+  standard: number;
+  reduced: number;
+  zero: number;
+  exempt: number;
+  out: number;
+};
+
 export default function VatDashboard() {
   const [firmName, setFirmName] = useState("Maddock & Co.");
   const [clientName, setClientName] = useState("");
@@ -20,7 +31,7 @@ export default function VatDashboard() {
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
-  const [months, setMonths] = useState(
+  const [months, setMonths] = useState<MonthRow[]>(
     Array.from({ length: 12 }, (_, i) => ({
       month: `Month ${i + 1}`,
       standard: 0,
@@ -31,9 +42,12 @@ export default function VatDashboard() {
     }))
   );
 
-  function updateValue(index: number, field: string, value: number) {
+  function updateValue(index: number, field: VatField, value: number) {
     const updated = [...months];
-    updated[index][field] = value;
+    updated[index] = {
+      ...updated[index],
+      [field]: value,
+    };
     setMonths(updated);
   }
 
@@ -66,13 +80,19 @@ export default function VatDashboard() {
 
     setSaving(true);
 
-    const { data: firm } = await supabase
+    const { data: firm, error: firmError } = await supabase
       .from("firms")
       .insert({ name: firmName })
       .select()
       .single();
 
-    const { data: client } = await supabase
+    if (firmError || !firm) {
+      setSaving(false);
+      setMessage(`Firm save failed: ${firmError?.message || "Unknown error"}`);
+      return;
+    }
+
+    const { data: client, error: clientError } = await supabase
       .from("clients")
       .insert({
         firm_id: firm.id,
@@ -81,6 +101,12 @@ export default function VatDashboard() {
       })
       .select()
       .single();
+
+    if (clientError || !client) {
+      setSaving(false);
+      setMessage(`Client save failed: ${clientError?.message || "Unknown error"}`);
+      return;
+    }
 
     const entries = months.map((m) => ({
       client_id: client.id,
@@ -92,15 +118,29 @@ export default function VatDashboard() {
       out_of_scope: m.out,
     }));
 
-    await supabase.from("turnover_entries").insert(entries);
+    const { error: turnoverError } = await supabase
+      .from("turnover_entries")
+      .insert(entries);
 
-    await supabase.from("vat_reviews").insert({
+    if (turnoverError) {
+      setSaving(false);
+      setMessage(`Turnover save failed: ${turnoverError.message}`);
+      return;
+    }
+
+    const { error: reviewError } = await supabase.from("vat_reviews").insert({
       client_id: client.id,
       rolling_taxable_turnover: taxableTotal,
       risk_status: risk,
     });
 
     setSaving(false);
+
+    if (reviewError) {
+      setMessage(`Review save failed: ${reviewError.message}`);
+      return;
+    }
+
     setMessage("Saved successfully.");
   }
 
@@ -112,21 +152,20 @@ export default function VatDashboard() {
           <h1 className="text-4xl font-bold">VAT Checker</h1>
         </div>
 
-        <div className="grid md:grid-cols-3 gap-6">
-
-          <div className="bg-white p-6 rounded-2xl shadow">
-            <h2 className="font-bold mb-3">Firm</h2>
+        <div className="grid gap-6 md:grid-cols-3">
+          <div className="rounded-2xl bg-white p-6 shadow">
+            <h2 className="mb-3 font-bold">Firm</h2>
             <input
-              className="w-full border p-2 mb-3"
+              className="mb-3 w-full border p-2"
               value={firmName}
               onChange={(e) => setFirmName(e.target.value)}
             />
           </div>
 
-          <div className="bg-white p-6 rounded-2xl shadow">
-            <h2 className="font-bold mb-3">Client</h2>
+          <div className="rounded-2xl bg-white p-6 shadow">
+            <h2 className="mb-3 font-bold">Client</h2>
             <input
-              className="w-full border p-2 mb-3"
+              className="mb-3 w-full border p-2"
               placeholder="Client name"
               value={clientName}
               onChange={(e) => setClientName(e.target.value)}
@@ -139,14 +178,14 @@ export default function VatDashboard() {
             />
           </div>
 
-          <div className="bg-white p-6 rounded-2xl shadow">
-            <h2 className="font-bold mb-3">VAT Status</h2>
+          <div className="rounded-2xl bg-white p-6 shadow">
+            <h2 className="mb-3 font-bold">VAT Status</h2>
             <p>Total: £{taxableTotal.toLocaleString()}</p>
             <p>Status: {risk}</p>
           </div>
         </div>
 
-        <div className="mt-6 bg-white p-6 rounded-2xl shadow overflow-x-auto">
+        <div className="mt-6 overflow-x-auto rounded-2xl bg-white p-6 shadow">
           <table className="w-full text-sm">
             <thead>
               <tr>
@@ -162,18 +201,20 @@ export default function VatDashboard() {
               {months.map((m, i) => (
                 <tr key={i}>
                   <td>{m.month}</td>
-                  {["standard", "reduced", "zero", "exempt", "out"].map((f) => (
-                    <td key={f}>
-                      <input
-                        type="number"
-                        className="border p-1 w-24"
-                        value={m[f]}
-                        onChange={(e) =>
-                          updateValue(i, f, Number(e.target.value))
-                        }
-                      />
-                    </td>
-                  ))}
+                  {(["standard", "reduced", "zero", "exempt", "out"] as VatField[]).map(
+                    (field) => (
+                      <td key={field}>
+                        <input
+                          type="number"
+                          className="w-24 border p-1"
+                          value={m[field]}
+                          onChange={(e) =>
+                            updateValue(i, field, Number(e.target.value))
+                          }
+                        />
+                      </td>
+                    )
+                  )}
                 </tr>
               ))}
             </tbody>
@@ -182,7 +223,8 @@ export default function VatDashboard() {
 
         <button
           onClick={saveAll}
-          className="mt-6 bg-blue-900 text-white px-6 py-3 rounded"
+          className="mt-6 rounded bg-blue-900 px-6 py-3 text-white"
+          disabled={saving}
         >
           {saving ? "Saving..." : "Save Full VAT Review"}
         </button>
