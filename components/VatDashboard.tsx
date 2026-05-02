@@ -15,10 +15,11 @@ export default function VatDashboard() {
   const [firmName, setFirmName] = useState("Maddock & Co.");
   const [clientName, setClientName] = useState("");
   const [sector, setSector] = useState("");
+  const [monthlyTurnover, setMonthlyTurnover] = useState(0);
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
-  async function saveFirmAndClient() {
+  async function saveFirmClientAndTurnover() {
     setMessage("");
 
     if (!firmName.trim()) {
@@ -53,23 +54,47 @@ export default function VatDashboard() {
       return;
     }
 
-    const { error: clientError } = await supabase.from("clients").insert({
-      firm_id: firm.id,
-      name: clientName,
-      sector: sector || null,
-      accounting_connection_status: "not_connected",
-    });
+    const { data: client, error: clientError } = await supabase
+      .from("clients")
+      .insert({
+        firm_id: firm.id,
+        name: clientName,
+        sector: sector || null,
+        accounting_connection_status: "not_connected",
+      })
+      .select()
+      .single();
 
-    setSaving(false);
-
-    if (clientError) {
-      setMessage(`Client save failed: ${clientError.message}`);
+    if (clientError || !client) {
+      setSaving(false);
+      setMessage(`Client save failed: ${clientError?.message || "Unknown error"}`);
       return;
     }
 
-    setMessage("Accounting firm and client saved successfully.");
+    const { error: turnoverError } = await supabase
+      .from("turnover_entries")
+      .insert({
+        client_id: client.id,
+        month_label: "Current Month",
+        standard_rated: monthlyTurnover,
+        reduced_rated: 0,
+        zero_rated: 0,
+        exempt: 0,
+        out_of_scope: 0,
+        source: "manual",
+      });
+
+    setSaving(false);
+
+    if (turnoverError) {
+      setMessage(`Turnover save failed: ${turnoverError.message}`);
+      return;
+    }
+
+    setMessage("Firm, client and turnover saved successfully.");
     setClientName("");
     setSector("");
+    setMonthlyTurnover(0);
   }
 
   return (
@@ -94,6 +119,11 @@ export default function VatDashboard() {
               value={firmName}
               onChange={(e) => setFirmName(e.target.value)}
             />
+
+            <div className="rounded-2xl bg-slate-100 p-4 text-sm text-slate-700">
+              This firm record will later control accountant users, client access,
+              subscription status and accounting software connections.
+            </div>
           </div>
 
           <div className="rounded-3xl bg-white p-6 shadow">
@@ -116,12 +146,20 @@ export default function VatDashboard() {
               onChange={(e) => setSector(e.target.value)}
             />
 
+            <label className="block text-sm font-medium">Monthly turnover (£)</label>
+            <input
+              type="number"
+              className="mb-4 mt-1 w-full rounded-xl border p-3"
+              value={monthlyTurnover}
+              onChange={(e) => setMonthlyTurnover(Number(e.target.value || 0))}
+            />
+
             <button
-              onClick={saveFirmAndClient}
+              onClick={saveFirmClientAndTurnover}
               disabled={saving}
               className="w-full rounded-xl bg-blue-950 px-4 py-3 font-semibold text-white disabled:opacity-60"
             >
-              {saving ? "Saving..." : "Save Firm and Client"}
+              {saving ? "Saving..." : "Save Firm, Client and Turnover"}
             </button>
 
             {message && (
