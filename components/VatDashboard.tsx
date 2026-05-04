@@ -40,6 +40,14 @@ type SavedReview = {
   created_at: string;
 };
 
+type AccountingConnection = {
+  id: string;
+  client_id: string;
+  provider: "xero" | "quickbooks" | "freeagent";
+  provider_tenant_id: string | null;
+  connected_at: string;
+};
+
 function formatMonth(date: Date) {
   return date.toLocaleString("en-GB", {
     month: "short",
@@ -47,10 +55,8 @@ function formatMonth(date: Date) {
   });
 }
 
-function getLastCompleted12Months() {
+function getLastCompleted12Months(): MonthRow[] {
   const today = new Date();
-
-  // Last completed month. Example: if today is May 2026, this ends at Apr 2026.
   const endMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
 
   return Array.from({ length: 12 }, (_, index) => {
@@ -86,9 +92,12 @@ export default function VatDashboard() {
 
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+
   const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
+  const [accountingConnections, setAccountingConnections] = useState<AccountingConnection[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
+
   const [months, setMonths] = useState<MonthRow[]>(getLastCompleted12Months());
 
   useEffect(() => {
@@ -113,6 +122,7 @@ export default function VatDashboard() {
 
   async function loadSavedData() {
     if (!supabase) return;
+
     setLoadingSaved(true);
 
     const { data: clients } = await supabase
@@ -125,8 +135,14 @@ export default function VatDashboard() {
       .select("id,client_id,rolling_taxable_turnover,risk_status,created_at")
       .order("created_at", { ascending: false });
 
+    const { data: connections } = await supabase
+      .from("accounting_connections")
+      .select("id,client_id,provider,provider_tenant_id,connected_at")
+      .order("connected_at", { ascending: false });
+
     setSavedClients((clients || []) as SavedClient[]);
     setSavedReviews((reviews || []) as SavedReview[]);
+    setAccountingConnections((connections || []) as AccountingConnection[]);
     setLoadingSaved(false);
   }
 
@@ -174,6 +190,47 @@ export default function VatDashboard() {
   function refreshRollingPeriod() {
     setMonths(getLastCompleted12Months());
     setMessage("Rolling 12-month period refreshed to the latest completed months.");
+  }
+
+  async function connectXeroPlaceholder() {
+    setMessage("");
+
+    if (!supabase) {
+      setMessage("Supabase not connected.");
+      return;
+    }
+
+    if (!selectedClientId) {
+      setMessage("Open or save a client before connecting Xero.");
+      return;
+    }
+
+    const existingXero = accountingConnections.find(
+      (connection) =>
+        connection.client_id === selectedClientId && connection.provider === "xero"
+    );
+
+    if (existingXero) {
+      setMessage("Xero is already marked as connected for this client.");
+      return;
+    }
+
+    const { error } = await supabase.from("accounting_connections").insert({
+      client_id: selectedClientId,
+      provider: "xero",
+      provider_tenant_id: "placeholder-xero-tenant",
+      access_token: null,
+      refresh_token: null,
+      token_expires_at: null,
+    });
+
+    if (error) {
+      setMessage(`Xero connection save failed: ${error.message}`);
+      return;
+    }
+
+    setMessage("Xero connection placeholder saved. Real OAuth is the next build step.");
+    await loadSavedData();
   }
 
   async function signUp() {
@@ -224,6 +281,7 @@ export default function VatDashboard() {
     setUser(null);
     setSavedClients([]);
     setSavedReviews([]);
+    setAccountingConnections([]);
   }
 
   function updateValue(index: number, field: VatField, value: number) {
@@ -270,6 +328,13 @@ export default function VatDashboard() {
   function reviewsForSelectedClient() {
     if (!selectedClientId) return [];
     return savedReviews.filter((review) => review.client_id === selectedClientId);
+  }
+
+  function connectionForClient(clientId: string, provider: "xero" | "quickbooks" | "freeagent") {
+    return accountingConnections.find(
+      (connection) =>
+        connection.client_id === clientId && connection.provider === provider
+    );
   }
 
   async function saveAll() {
@@ -493,6 +558,10 @@ export default function VatDashboard() {
   const rollingPeriod =
     months.length > 0 ? `${months[0].month} to ${months[months.length - 1].month}` : "";
 
+  const selectedXeroConnection = selectedClientId
+    ? connectionForClient(selectedClientId, "xero")
+    : undefined;
+
   return (
     <main className="min-h-screen bg-slate-50 p-6">
       <div className="mx-auto max-w-7xl">
@@ -581,12 +650,15 @@ export default function VatDashboard() {
                     <th className="p-2">Sector</th>
                     <th className="p-2">Latest turnover</th>
                     <th className="p-2">Latest risk</th>
+                    <th className="p-2">Xero</th>
                     <th className="p-2">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {savedClients.map((client) => {
                     const review = latestReviewForClient(client.id);
+                    const xeroConnection = connectionForClient(client.id, "xero");
+
                     return (
                       <tr key={client.id} className="border-b">
                         <td className="p-2 font-medium">{client.name}</td>
@@ -597,6 +669,17 @@ export default function VatDashboard() {
                             : "-"}
                         </td>
                         <td className="p-2">{review?.risk_status || "-"}</td>
+                        <td className="p-2">
+                          {xeroConnection ? (
+                            <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                              Connected
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">
+                              Not connected
+                            </span>
+                          )}
+                        </td>
                         <td className="p-2">
                           <button
                             onClick={() => openClient(client)}
@@ -613,6 +696,42 @@ export default function VatDashboard() {
             </div>
           )}
         </div>
+
+        {selectedClientId && (
+          <div className="mb-6 rounded-2xl bg-white p-6 shadow">
+            <h2 className="text-xl font-bold">Accounting software connection</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Connect accounting software so sales income can be imported automatically.
+            </p>
+
+            <div className="mt-4 rounded-2xl border bg-slate-50 p-4">
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                <div>
+                  <h3 className="font-semibold">Xero</h3>
+                  <p className="text-sm text-slate-600">
+                    {selectedXeroConnection
+                      ? `Connected placeholder on ${new Date(
+                          selectedXeroConnection.connected_at
+                        ).toLocaleDateString("en-GB")}`
+                      : "Not connected yet."}
+                  </p>
+                </div>
+
+                <button
+                  onClick={connectXeroPlaceholder}
+                  className="rounded-xl bg-blue-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
+                  disabled={Boolean(selectedXeroConnection)}
+                >
+                  {selectedXeroConnection ? "Xero connected" : "Connect Xero"}
+                </button>
+              </div>
+
+              <p className="mt-3 text-xs text-slate-500">
+                This is the connection foundation only. The next build will replace this placeholder with real Xero OAuth authorisation.
+              </p>
+            </div>
+          </div>
+        )}
 
         {selectedClientId && (
           <div className="mb-6 rounded-2xl bg-white p-6 shadow">
@@ -684,6 +803,7 @@ export default function VatDashboard() {
               value={sector}
               onChange={(e) => setSector(e.target.value)}
             />
+
             <label className="block text-sm font-medium">
               Expected taxable turnover in next 30 days
             </label>
