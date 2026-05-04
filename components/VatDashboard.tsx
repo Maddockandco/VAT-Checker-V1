@@ -40,6 +40,21 @@ type SavedReview = {
   created_at: string;
 };
 
+const defaultMonths: MonthRow[] = [
+  { month: "May 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Jun 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Jul 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Aug 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Sep 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Oct 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Nov 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Dec 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Jan 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Feb 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Mar 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+  { month: "Apr 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
+];
+
 export default function VatDashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [email, setEmail] = useState("");
@@ -50,27 +65,14 @@ export default function VatDashboard() {
   const [firmName, setFirmName] = useState("Maddock & Co.");
   const [clientName, setClientName] = useState("");
   const [sector, setSector] = useState("");
+  const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
-
   const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
-
-  const [months, setMonths] = useState<MonthRow[]>([
-    { month: "May 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Jun 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Jul 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Aug 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Sep 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Oct 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Nov 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Dec 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Jan 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Feb 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Mar 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-    { month: "Apr 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  ]);
+  const [months, setMonths] = useState<MonthRow[]>(defaultMonths);
 
   useEffect(() => {
     if (!supabase) return;
@@ -86,22 +88,14 @@ export default function VatDashboard() {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user || null);
-      if (session?.user) {
-        loadSavedData();
-      } else {
-        setSavedClients([]);
-        setSavedReviews([]);
-      }
+      if (session?.user) loadSavedData();
     });
 
-    return () => {
-      subscription.unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   async function loadSavedData() {
     if (!supabase) return;
-
     setLoadingSaved(true);
 
     const { data: clients } = await supabase
@@ -119,6 +113,43 @@ export default function VatDashboard() {
     setLoadingSaved(false);
   }
 
+  async function openClient(client: SavedClient) {
+    if (!supabase) return;
+
+    setSelectedClientId(client.id);
+    setClientName(client.name);
+    setSector(client.sector || "");
+    setMessage(`Editing ${client.name}`);
+
+    const { data: entries } = await supabase
+      .from("turnover_entries")
+      .select("month_label,standard_rated,reduced_rated,zero_rated,exempt,out_of_scope")
+      .eq("client_id", client.id);
+
+    const loadedMonths = defaultMonths.map((month) => {
+      const match = entries?.find((entry) => entry.month_label === month.month);
+
+      return {
+        month: month.month,
+        standard: Number(match?.standard_rated || 0),
+        reduced: Number(match?.reduced_rated || 0),
+        zero: Number(match?.zero_rated || 0),
+        exempt: Number(match?.exempt || 0),
+        out: Number(match?.out_of_scope || 0),
+      };
+    });
+
+    setMonths(loadedMonths);
+  }
+
+  function startNewClient() {
+    setSelectedClientId(null);
+    setClientName("");
+    setSector("");
+    setMonths(defaultMonths);
+    setMessage("New client mode.");
+  }
+
   async function signUp() {
     setLoginMessage("");
 
@@ -127,28 +158,14 @@ export default function VatDashboard() {
       return;
     }
 
-    if (!email.trim() || !password.trim()) {
-      setLoginMessage("Please enter email and password.");
-      return;
-    }
-
-    const { data, error } = await supabase.auth.signUp({
-      email,
-      password,
-    });
+    const { data, error } = await supabase.auth.signUp({ email, password });
 
     if (error) {
       setLoginMessage(error.message);
       return;
     }
 
-    if (data.user) {
-      setUser(data.user);
-      setLoginMessage("Account created and signed in.");
-      await loadSavedData();
-    } else {
-      setLoginMessage("Account created. Please sign in.");
-    }
+    if (data.user) setUser(data.user);
   }
 
   async function signIn() {
@@ -156,11 +173,6 @@ export default function VatDashboard() {
 
     if (!supabase) {
       setLoginMessage("Supabase is not connected.");
-      return;
-    }
-
-    if (!email.trim() || !password.trim()) {
-      setLoginMessage("Please enter email and password.");
       return;
     }
 
@@ -176,7 +188,6 @@ export default function VatDashboard() {
 
     if (data.user) {
       setUser(data.user);
-      setLoginMessage("");
       await loadSavedData();
     }
   }
@@ -191,10 +202,7 @@ export default function VatDashboard() {
 
   function updateValue(index: number, field: VatField, value: number) {
     const updated = [...months];
-    updated[index] = {
-      ...updated[index],
-      [field]: value,
-    };
+    updated[index] = { ...updated[index], [field]: value };
     setMonths(updated);
   }
 
@@ -238,69 +246,101 @@ export default function VatDashboard() {
 
     setSaving(true);
 
-    const { data: profile, error: profileError } = await supabase
-      .from("user_profiles")
-      .upsert({
-        id: user.id,
-        email: user.email,
-        role: "firm_admin",
-      })
-      .select()
-      .single();
+    let clientId = selectedClientId;
 
-    if (profileError || !profile) {
-      setSaving(false);
-      setMessage(`Profile save failed: ${profileError?.message || "Unknown error"}`);
-      return;
-    }
+    if (clientId) {
+      const { error: clientUpdateError } = await supabase
+        .from("clients")
+        .update({
+          name: clientName,
+          sector,
+        })
+        .eq("id", clientId);
 
-    const { data: firm, error: firmError } = await supabase
-      .from("firms")
-      .insert({
-        name: firmName,
-        subscription_status: "trial",
-      })
-      .select()
-      .single();
+      if (clientUpdateError) {
+        setSaving(false);
+        setMessage(`Client update failed: ${clientUpdateError.message}`);
+        return;
+      }
 
-    if (firmError || !firm) {
-      setSaving(false);
-      setMessage(`Firm save failed: ${firmError?.message || "Unknown error"}`);
-      return;
-    }
+      const { error: deleteError } = await supabase
+        .from("turnover_entries")
+        .delete()
+        .eq("client_id", clientId);
 
-    const { error: firmAccessError } = await supabase
-      .from("firm_user_access")
-      .insert({
-        firm_id: firm.id,
-        user_id: user.id,
-        role: "firm_admin",
-      });
+      if (deleteError) {
+        setSaving(false);
+        setMessage(`Could not replace turnover entries: ${deleteError.message}`);
+        return;
+      }
+    } else {
+      const { data: profile, error: profileError } = await supabase
+        .from("user_profiles")
+        .upsert({
+          id: user.id,
+          email: user.email,
+          role: "firm_admin",
+        })
+        .select()
+        .single();
 
-    if (firmAccessError) {
-      setSaving(false);
-      setMessage(`Firm access save failed: ${firmAccessError.message}`);
-      return;
-    }
+      if (profileError || !profile) {
+        setSaving(false);
+        setMessage(`Profile save failed: ${profileError?.message || "Unknown error"}`);
+        return;
+      }
 
-    const { data: client, error: clientError } = await supabase
-      .from("clients")
-      .insert({
-        firm_id: firm.id,
-        name: clientName,
-        sector,
-      })
-      .select()
-      .single();
+      const { data: firm, error: firmError } = await supabase
+        .from("firms")
+        .insert({
+          name: firmName,
+          subscription_status: "trial",
+        })
+        .select()
+        .single();
 
-    if (clientError || !client) {
-      setSaving(false);
-      setMessage(`Client save failed: ${clientError?.message || "Unknown error"}`);
-      return;
+      if (firmError || !firm) {
+        setSaving(false);
+        setMessage(`Firm save failed: ${firmError?.message || "Unknown error"}`);
+        return;
+      }
+
+      const { error: firmAccessError } = await supabase
+        .from("firm_user_access")
+        .insert({
+          firm_id: firm.id,
+          user_id: user.id,
+          role: "firm_admin",
+        });
+
+      if (firmAccessError) {
+        setSaving(false);
+        setMessage(`Firm access save failed: ${firmAccessError.message}`);
+        return;
+      }
+
+      const { data: client, error: clientError } = await supabase
+        .from("clients")
+        .insert({
+          firm_id: firm.id,
+          name: clientName,
+          sector,
+        })
+        .select()
+        .single();
+
+      if (clientError || !client) {
+        setSaving(false);
+        setMessage(`Client save failed: ${clientError?.message || "Unknown error"}`);
+        return;
+      }
+
+      clientId = client.id;
+      setSelectedClientId(client.id);
     }
 
     const entries = months.map((m) => ({
-      client_id: client.id,
+      client_id: clientId,
       month_label: m.month,
       standard_rated: m.standard,
       reduced_rated: m.reduced,
@@ -320,7 +360,7 @@ export default function VatDashboard() {
     }
 
     const { error: reviewError } = await supabase.from("vat_reviews").insert({
-      client_id: client.id,
+      client_id: clientId,
       rolling_taxable_turnover: taxableTotal,
       risk_status: risk,
     });
@@ -332,9 +372,7 @@ export default function VatDashboard() {
       return;
     }
 
-    setMessage("Saved successfully.");
-    setClientName("");
-    setSector("");
+    setMessage(selectedClientId ? "Client updated successfully." : "New client saved successfully.");
     await loadSavedData();
   }
 
@@ -374,7 +412,6 @@ export default function VatDashboard() {
             <input
               type="email"
               className="mb-4 mt-1 w-full rounded-xl border p-3"
-              placeholder="you@example.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
@@ -383,7 +420,6 @@ export default function VatDashboard() {
             <input
               type="password"
               className="mb-4 mt-1 w-full rounded-xl border p-3"
-              placeholder="Enter password"
               value={password}
               onChange={(e) => setPassword(e.target.value)}
             />
@@ -396,7 +432,7 @@ export default function VatDashboard() {
             </button>
 
             {loginMessage && (
-              <p className="mt-4 rounded-xl bg-slate-100 p-3 text-sm text-slate-700">
+              <p className="mt-4 rounded-xl bg-slate-100 p-3 text-sm">
                 {loginMessage}
               </p>
             )}
@@ -449,19 +485,28 @@ export default function VatDashboard() {
         </div>
 
         <div className="mb-6 rounded-2xl bg-white p-6 shadow">
-          <div className="mb-4 flex items-center justify-between">
+          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-bold">Saved clients</h2>
               <p className="text-sm text-slate-500">
-                Clients and VAT reviews linked to your signed-in account.
+                Open a client to view or update their VAT review.
               </p>
             </div>
-            <button
-              onClick={loadSavedData}
-              className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700"
-            >
-              {loadingSaved ? "Loading..." : "Refresh"}
-            </button>
+
+            <div className="flex gap-2">
+              <button
+                onClick={startNewClient}
+                className="rounded-xl bg-blue-950 px-4 py-2 text-sm font-semibold text-white"
+              >
+                New client
+              </button>
+              <button
+                onClick={loadSavedData}
+                className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700"
+              >
+                {loadingSaved ? "Loading..." : "Refresh"}
+              </button>
+            </div>
           </div>
 
           {savedClients.length === 0 ? (
@@ -477,7 +522,7 @@ export default function VatDashboard() {
                     <th className="p-2">Sector</th>
                     <th className="p-2">Latest turnover</th>
                     <th className="p-2">Latest risk</th>
-                    <th className="p-2">Saved</th>
+                    <th className="p-2">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -494,7 +539,12 @@ export default function VatDashboard() {
                         </td>
                         <td className="p-2">{review?.risk_status || "-"}</td>
                         <td className="p-2">
-                          {new Date(client.created_at).toLocaleDateString("en-GB")}
+                          <button
+                            onClick={() => openClient(client)}
+                            className="rounded-lg bg-slate-100 px-3 py-1 text-sm font-semibold"
+                          >
+                            Open / edit
+                          </button>
                         </td>
                       </tr>
                     );
@@ -516,7 +566,9 @@ export default function VatDashboard() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow">
-            <h2 className="mb-3 font-bold">New client review</h2>
+            <h2 className="mb-3 font-bold">
+              {selectedClientId ? "Editing client" : "New client review"}
+            </h2>
             <input
               className="mb-3 w-full rounded border p-2"
               placeholder="Client name"
@@ -573,7 +625,11 @@ export default function VatDashboard() {
           className="mt-6 rounded bg-blue-900 px-6 py-3 text-white"
           disabled={saving}
         >
-          {saving ? "Saving..." : "Save VAT Review"}
+          {saving
+            ? "Saving..."
+            : selectedClientId
+            ? "Update VAT Review"
+            : "Save New VAT Review"}
         </button>
 
         {message && <p className="mt-4">{message}</p>}
