@@ -226,6 +226,11 @@ export default function VatDashboard() {
     return savedReviews.find((review) => review.client_id === clientId);
   }
 
+  function reviewsForSelectedClient() {
+    if (!selectedClientId) return [];
+    return savedReviews.filter((review) => review.client_id === selectedClientId);
+  }
+
   async function saveAll() {
     setMessage("");
 
@@ -442,6 +447,8 @@ export default function VatDashboard() {
     );
   }
 
+  const selectedClientReviews = reviewsForSelectedClient();
+
   return (
     <main className="min-h-screen bg-slate-50 p-6">
       <div className="mx-auto max-w-7xl">
@@ -489,7 +496,7 @@ export default function VatDashboard() {
             <div>
               <h2 className="text-xl font-bold">Saved clients</h2>
               <p className="text-sm text-slate-500">
-                Open a client to view or update their VAT review.
+                Open a client to view, edit or review their VAT history.
               </p>
             </div>
 
@@ -554,6 +561,50 @@ export default function VatDashboard() {
             </div>
           )}
         </div>
+
+        {selectedClientId && (
+          <div className="mb-6 rounded-2xl bg-white p-6 shadow">
+            <h2 className="text-xl font-bold">Client VAT history</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Audit trail of previous VAT reviews for {clientName}.
+            </p>
+
+            {selectedClientReviews.length === 0 ? (
+              <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
+                No VAT review history found for this client.
+              </p>
+            ) : (
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b text-left">
+                      <th className="p-2">Review date</th>
+                      <th className="p-2">Taxable turnover</th>
+                      <th className="p-2">Risk status</th>
+                      <th className="p-2">Version</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {selectedClientReviews.map((review, index) => (
+                      <tr key={review.id} className={index === 0 ? "border-b bg-blue-50" : "border-b"}>
+                        <td className="p-2">
+                          {new Date(review.created_at).toLocaleString("en-GB")}
+                        </td>
+                        <td className="p-2 font-semibold">
+                          £{Number(review.rolling_taxable_turnover).toLocaleString()}
+                        </td>
+                        <td className="p-2">{review.risk_status}</td>
+                        <td className="p-2">
+                          {index === 0 ? "Latest review" : `Previous review ${index}`}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="mb-6 grid gap-6 md:grid-cols-2">
           <div className="rounded-2xl bg-white p-6 shadow">
