@@ -40,20 +40,36 @@ type SavedReview = {
   created_at: string;
 };
 
-const defaultMonths: MonthRow[] = [
-  { month: "May 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Jun 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Jul 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Aug 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Sep 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Oct 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Nov 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Dec 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Jan 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Feb 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Mar 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-  { month: "Apr 2026", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
-];
+function formatMonth(date: Date) {
+  return date.toLocaleString("en-GB", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function getLastCompleted12Months() {
+  const today = new Date();
+
+  // Last completed month. Example: if today is May 2026, this ends at Apr 2026.
+  const endMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+
+  return Array.from({ length: 12 }, (_, index) => {
+    const monthDate = new Date(
+      endMonth.getFullYear(),
+      endMonth.getMonth() - (11 - index),
+      1
+    );
+
+    return {
+      month: formatMonth(monthDate),
+      standard: 0,
+      reduced: 0,
+      zero: 0,
+      exempt: 0,
+      out: 0,
+    };
+  });
+}
 
 export default function VatDashboard() {
   const [user, setUser] = useState<User | null>(null);
@@ -66,13 +82,14 @@ export default function VatDashboard() {
   const [clientName, setClientName] = useState("");
   const [sector, setSector] = useState("");
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
+  const [expectedNext30Days, setExpectedNext30Days] = useState(0);
 
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
-  const [months, setMonths] = useState<MonthRow[]>(defaultMonths);
+  const [months, setMonths] = useState<MonthRow[]>(getLastCompleted12Months());
 
   useEffect(() => {
     if (!supabase) return;
@@ -121,12 +138,14 @@ export default function VatDashboard() {
     setSector(client.sector || "");
     setMessage(`Editing ${client.name}`);
 
+    const baseMonths = getLastCompleted12Months();
+
     const { data: entries } = await supabase
       .from("turnover_entries")
       .select("month_label,standard_rated,reduced_rated,zero_rated,exempt,out_of_scope")
       .eq("client_id", client.id);
 
-    const loadedMonths = defaultMonths.map((month) => {
+    const loadedMonths = baseMonths.map((month) => {
       const match = entries?.find((entry) => entry.month_label === month.month);
 
       return {
@@ -140,14 +159,21 @@ export default function VatDashboard() {
     });
 
     setMonths(loadedMonths);
+    setExpectedNext30Days(0);
   }
 
   function startNewClient() {
     setSelectedClientId(null);
     setClientName("");
     setSector("");
-    setMonths(defaultMonths);
+    setExpectedNext30Days(0);
+    setMonths(getLastCompleted12Months());
     setMessage("New client mode.");
+  }
+
+  function refreshRollingPeriod() {
+    setMonths(getLastCompleted12Months());
+    setMessage("Rolling 12-month period refreshed to the latest completed months.");
   }
 
   async function signUp() {
@@ -206,21 +232,36 @@ export default function VatDashboard() {
     setMonths(updated);
   }
 
-  const taxableTotal = months.reduce(
-    (sum, m) => sum + m.standard + m.reduced + m.zero,
+  const rollingTaxableTurnover = months.reduce(
+    (sum, month) => sum + month.standard + month.reduced + month.zero,
     0
   );
 
-  const remaining = VAT_THRESHOLD - taxableTotal;
+  const exemptTotal = months.reduce((sum, month) => sum + month.exempt, 0);
+  const outOfScopeTotal = months.reduce((sum, month) => sum + month.out, 0);
+  const thresholdRemaining = VAT_THRESHOLD - rollingTaxableTurnover;
+  const thresholdUsed = (rollingTaxableTurnover / VAT_THRESHOLD) * 100;
+  const forwardLookTriggered = expectedNext30Days > VAT_THRESHOLD;
 
   const risk =
-    taxableTotal >= VAT_THRESHOLD
+    rollingTaxableTurnover >= VAT_THRESHOLD
       ? "Registration Required"
-      : taxableTotal >= 0.9 * VAT_THRESHOLD
+      : forwardLookTriggered
+      ? "Forward-Look Trigger"
+      : rollingTaxableTurnover >= 0.9 * VAT_THRESHOLD
       ? "High Risk"
-      : taxableTotal >= 0.8 * VAT_THRESHOLD
+      : rollingTaxableTurnover >= 0.8 * VAT_THRESHOLD
       ? "Warning"
       : "Low Risk";
+
+  const riskColour =
+    risk === "Registration Required" || risk === "Forward-Look Trigger"
+      ? "text-red-700"
+      : risk === "High Risk"
+      ? "text-orange-700"
+      : risk === "Warning"
+      ? "text-yellow-700"
+      : "text-green-700";
 
   function latestReviewForClient(clientId: string) {
     return savedReviews.find((review) => review.client_id === clientId);
@@ -344,14 +385,14 @@ export default function VatDashboard() {
       setSelectedClientId(client.id);
     }
 
-    const entries = months.map((m) => ({
+    const entries = months.map((month) => ({
       client_id: clientId,
-      month_label: m.month,
-      standard_rated: m.standard,
-      reduced_rated: m.reduced,
-      zero_rated: m.zero,
-      exempt: m.exempt,
-      out_of_scope: m.out,
+      month_label: month.month,
+      standard_rated: month.standard,
+      reduced_rated: month.reduced,
+      zero_rated: month.zero,
+      exempt: month.exempt,
+      out_of_scope: month.out,
     }));
 
     const { error: turnoverError } = await supabase
@@ -366,7 +407,8 @@ export default function VatDashboard() {
 
     const { error: reviewError } = await supabase.from("vat_reviews").insert({
       client_id: clientId,
-      rolling_taxable_turnover: taxableTotal,
+      rolling_taxable_turnover: rollingTaxableTurnover,
+      expected_next_30_days: expectedNext30Days,
       risk_status: risk,
     });
 
@@ -448,6 +490,8 @@ export default function VatDashboard() {
   }
 
   const selectedClientReviews = reviewsForSelectedClient();
+  const rollingPeriod =
+    months.length > 0 ? `${months[0].month} to ${months[months.length - 1].month}` : "";
 
   return (
     <main className="min-h-screen bg-slate-50 p-6">
@@ -458,6 +502,9 @@ export default function VatDashboard() {
               <p>Provided by Maddock & Co.</p>
               <h1 className="mt-2 text-4xl font-bold">VAT Checker</h1>
               <p className="mt-2 text-blue-100">Signed in as {user.email}</p>
+              <p className="mt-1 text-sm text-blue-100">
+                Rolling period: {rollingPeriod}
+              </p>
             </div>
 
             <button
@@ -469,25 +516,30 @@ export default function VatDashboard() {
           </div>
         </div>
 
-        <div className="mb-6 grid gap-6 md:grid-cols-4">
+        <div className="mb-6 grid gap-6 md:grid-cols-5">
           <div className="rounded-xl bg-white p-4 shadow">
-            <p className="text-sm text-gray-500">Current taxable turnover</p>
-            <p className="text-2xl font-bold">£{taxableTotal.toLocaleString()}</p>
+            <p className="text-sm text-gray-500">Rolling taxable turnover</p>
+            <p className="text-2xl font-bold">£{rollingTaxableTurnover.toLocaleString()}</p>
           </div>
 
           <div className="rounded-xl bg-white p-4 shadow">
-            <p className="text-sm text-gray-500">VAT threshold</p>
-            <p className="text-2xl font-bold">£90,000</p>
+            <p className="text-sm text-gray-500">Threshold used</p>
+            <p className="text-2xl font-bold">{thresholdUsed.toFixed(1)}%</p>
           </div>
 
           <div className="rounded-xl bg-white p-4 shadow">
             <p className="text-sm text-gray-500">Remaining</p>
-            <p className="text-2xl font-bold">£{remaining.toLocaleString()}</p>
+            <p className="text-2xl font-bold">£{thresholdRemaining.toLocaleString()}</p>
+          </div>
+
+          <div className="rounded-xl bg-white p-4 shadow">
+            <p className="text-sm text-gray-500">30-day forecast</p>
+            <p className="text-2xl font-bold">£{expectedNext30Days.toLocaleString()}</p>
           </div>
 
           <div className="rounded-xl bg-white p-4 shadow">
             <p className="text-sm text-gray-500">Risk</p>
-            <p className="text-2xl font-bold">{risk}</p>
+            <p className={`text-2xl font-bold ${riskColour}`}>{risk}</p>
           </div>
         </div>
 
@@ -627,12 +679,30 @@ export default function VatDashboard() {
               onChange={(e) => setClientName(e.target.value)}
             />
             <input
-              className="w-full rounded border p-2"
+              className="mb-3 w-full rounded border p-2"
               placeholder="Sector"
               value={sector}
               onChange={(e) => setSector(e.target.value)}
             />
+            <label className="block text-sm font-medium">
+              Expected taxable turnover in next 30 days
+            </label>
+            <input
+              type="number"
+              className="mt-1 w-full rounded border p-2"
+              value={expectedNext30Days}
+              onChange={(e) => setExpectedNext30Days(Number(e.target.value || 0))}
+            />
           </div>
+        </div>
+
+        <div className="mb-3 flex justify-end">
+          <button
+            onClick={refreshRollingPeriod}
+            className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700"
+          >
+            Refresh latest 12-month period
+          </button>
         </div>
 
         <div className="overflow-x-auto rounded-2xl bg-white p-6 shadow">
@@ -640,35 +710,43 @@ export default function VatDashboard() {
             <thead>
               <tr>
                 <th>Month</th>
-                <th>Standard</th>
-                <th>Reduced</th>
-                <th>Zero</th>
+                <th>Standard-rated</th>
+                <th>Reduced-rated</th>
+                <th>Zero-rated</th>
                 <th>Exempt</th>
-                <th>Out</th>
+                <th>Out of scope</th>
+                <th>Taxable total</th>
               </tr>
             </thead>
             <tbody>
-              {months.map((m, i) => (
-                <tr key={i}>
-                  <td>{m.month}</td>
+              {months.map((month, index) => (
+                <tr key={month.month}>
+                  <td className="p-2 font-medium">{month.month}</td>
                   {(["standard", "reduced", "zero", "exempt", "out"] as VatField[]).map(
                     (field) => (
-                      <td key={field}>
+                      <td key={field} className="p-2">
                         <input
                           type="number"
-                          className="w-24 border p-1"
-                          value={m[field]}
+                          className="w-28 rounded border p-2"
+                          value={month[field]}
                           onChange={(e) =>
-                            updateValue(i, field, Number(e.target.value))
+                            updateValue(index, field, Number(e.target.value))
                           }
                         />
                       </td>
                     )
                   )}
+                  <td className="p-2 font-semibold">
+                    £{(month.standard + month.reduced + month.zero).toLocaleString()}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
+        </div>
+
+        <div className="mt-6 rounded-2xl bg-white p-5 text-sm text-slate-700 shadow">
+          <strong>VAT logic:</strong> Standard-rated, reduced-rated and zero-rated income are included in taxable turnover. Exempt and out-of-scope income are excluded from the VAT registration threshold calculation.
         </div>
 
         <button
