@@ -24,6 +24,22 @@ type MonthRow = {
   out: number;
 };
 
+type SavedClient = {
+  id: string;
+  name: string;
+  sector: string | null;
+  firm_id: string | null;
+  created_at: string;
+};
+
+type SavedReview = {
+  id: string;
+  client_id: string;
+  rolling_taxable_turnover: number;
+  risk_status: string;
+  created_at: string;
+};
+
 export default function VatDashboard() {
   const [user, setUser] = useState<User | null>(null);
   const [email, setEmail] = useState("");
@@ -36,6 +52,10 @@ export default function VatDashboard() {
   const [sector, setSector] = useState("");
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+
+  const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
+  const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
 
   const [months, setMonths] = useState<MonthRow[]>([
     { month: "May 2025", standard: 0, reduced: 0, zero: 0, exempt: 0, out: 0 },
@@ -56,19 +76,48 @@ export default function VatDashboard() {
     if (!supabase) return;
 
     supabase.auth.getUser().then(({ data }) => {
-      if (data.user) setUser(data.user);
+      if (data.user) {
+        setUser(data.user);
+        loadSavedData();
+      }
     });
 
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user || null);
+      if (session?.user) {
+        loadSavedData();
+      } else {
+        setSavedClients([]);
+        setSavedReviews([]);
+      }
     });
 
     return () => {
       subscription.unsubscribe();
     };
   }, []);
+
+  async function loadSavedData() {
+    if (!supabase) return;
+
+    setLoadingSaved(true);
+
+    const { data: clients } = await supabase
+      .from("clients")
+      .select("id,name,sector,firm_id,created_at")
+      .order("created_at", { ascending: false });
+
+    const { data: reviews } = await supabase
+      .from("vat_reviews")
+      .select("id,client_id,rolling_taxable_turnover,risk_status,created_at")
+      .order("created_at", { ascending: false });
+
+    setSavedClients((clients || []) as SavedClient[]);
+    setSavedReviews((reviews || []) as SavedReview[]);
+    setLoadingSaved(false);
+  }
 
   async function signUp() {
     setLoginMessage("");
@@ -96,6 +145,7 @@ export default function VatDashboard() {
     if (data.user) {
       setUser(data.user);
       setLoginMessage("Account created and signed in.");
+      await loadSavedData();
     } else {
       setLoginMessage("Account created. Please sign in.");
     }
@@ -127,6 +177,7 @@ export default function VatDashboard() {
     if (data.user) {
       setUser(data.user);
       setLoginMessage("");
+      await loadSavedData();
     }
   }
 
@@ -134,6 +185,8 @@ export default function VatDashboard() {
     if (!supabase) return;
     await supabase.auth.signOut();
     setUser(null);
+    setSavedClients([]);
+    setSavedReviews([]);
   }
 
   function updateValue(index: number, field: VatField, value: number) {
@@ -160,6 +213,10 @@ export default function VatDashboard() {
       : taxableTotal >= 0.8 * VAT_THRESHOLD
       ? "Warning"
       : "Low Risk";
+
+  function latestReviewForClient(clientId: string) {
+    return savedReviews.find((review) => review.client_id === clientId);
+  }
 
   async function saveAll() {
     setMessage("");
@@ -276,6 +333,9 @@ export default function VatDashboard() {
     }
 
     setMessage("Saved successfully.");
+    setClientName("");
+    setSector("");
+    await loadSavedData();
   }
 
   if (!user) {
@@ -368,12 +428,12 @@ export default function VatDashboard() {
 
         <div className="mb-6 grid gap-6 md:grid-cols-4">
           <div className="rounded-xl bg-white p-4 shadow">
-            <p className="text-sm text-gray-500">Taxable Turnover</p>
+            <p className="text-sm text-gray-500">Current taxable turnover</p>
             <p className="text-2xl font-bold">£{taxableTotal.toLocaleString()}</p>
           </div>
 
           <div className="rounded-xl bg-white p-4 shadow">
-            <p className="text-sm text-gray-500">Threshold</p>
+            <p className="text-sm text-gray-500">VAT threshold</p>
             <p className="text-2xl font-bold">£90,000</p>
           </div>
 
@@ -388,6 +448,63 @@ export default function VatDashboard() {
           </div>
         </div>
 
+        <div className="mb-6 rounded-2xl bg-white p-6 shadow">
+          <div className="mb-4 flex items-center justify-between">
+            <div>
+              <h2 className="text-xl font-bold">Saved clients</h2>
+              <p className="text-sm text-slate-500">
+                Clients and VAT reviews linked to your signed-in account.
+              </p>
+            </div>
+            <button
+              onClick={loadSavedData}
+              className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700"
+            >
+              {loadingSaved ? "Loading..." : "Refresh"}
+            </button>
+          </div>
+
+          {savedClients.length === 0 ? (
+            <p className="rounded-xl bg-slate-50 p-4 text-sm text-slate-600">
+              No saved clients yet.
+            </p>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="p-2">Client</th>
+                    <th className="p-2">Sector</th>
+                    <th className="p-2">Latest turnover</th>
+                    <th className="p-2">Latest risk</th>
+                    <th className="p-2">Saved</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {savedClients.map((client) => {
+                    const review = latestReviewForClient(client.id);
+                    return (
+                      <tr key={client.id} className="border-b">
+                        <td className="p-2 font-medium">{client.name}</td>
+                        <td className="p-2">{client.sector || "-"}</td>
+                        <td className="p-2">
+                          {review
+                            ? `£${Number(review.rolling_taxable_turnover).toLocaleString()}`
+                            : "-"}
+                        </td>
+                        <td className="p-2">{review?.risk_status || "-"}</td>
+                        <td className="p-2">
+                          {new Date(client.created_at).toLocaleDateString("en-GB")}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
         <div className="mb-6 grid gap-6 md:grid-cols-2">
           <div className="rounded-2xl bg-white p-6 shadow">
             <h2 className="mb-3 font-bold">Firm</h2>
@@ -399,7 +516,7 @@ export default function VatDashboard() {
           </div>
 
           <div className="rounded-2xl bg-white p-6 shadow">
-            <h2 className="mb-3 font-bold">Client</h2>
+            <h2 className="mb-3 font-bold">New client review</h2>
             <input
               className="mb-3 w-full rounded border p-2"
               placeholder="Client name"
