@@ -92,6 +92,7 @@ export default function VatDashboard() {
 
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
+  const [importingXero, setImportingXero] = useState(false);
 
   const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
@@ -189,48 +190,55 @@ export default function VatDashboard() {
 
   function refreshRollingPeriod() {
     setMonths(getLastCompleted12Months());
-    setMessage("Rolling 12-month period refreshed to the latest completed months.");
+    setMessage("Rolling 12-month period refreshed.");
   }
 
-  async function connectXeroPlaceholder() {
-    setMessage("");
-
-    if (!supabase) {
-      setMessage("Supabase not connected.");
-      return;
-    }
-
+  async function connectXero() {
     if (!selectedClientId) {
       setMessage("Open or save a client before connecting Xero.");
       return;
     }
 
-    const existingXero = accountingConnections.find(
-      (connection) =>
-        connection.client_id === selectedClientId && connection.provider === "xero"
-    );
+    window.location.href = `/api/xero/connect?clientId=${selectedClientId}`;
+  }
 
-    if (existingXero) {
-      setMessage("Xero is already marked as connected for this client.");
+  async function importFromXero() {
+    if (!selectedClientId) {
+      setMessage("Open a client before importing from Xero.");
       return;
     }
 
-    const { error } = await supabase.from("accounting_connections").insert({
-      client_id: selectedClientId,
-      provider: "xero",
-      provider_tenant_id: "placeholder-xero-tenant",
-      access_token: null,
-      refresh_token: null,
-      token_expires_at: null,
-    });
+    setImportingXero(true);
+    setMessage("Importing Xero invoices...");
 
-    if (error) {
-      setMessage(`Xero connection save failed: ${error.message}`);
-      return;
+    try {
+      const response = await fetch(`/api/xero/import?clientId=${selectedClientId}`);
+      const data = await response.json();
+
+      if (!response.ok) {
+        setMessage(`Xero import failed: ${data.error || "Unknown error"}`);
+        setImportingXero(false);
+        return;
+      }
+
+      setMessage(
+        `Xero import complete. Rolling turnover: £${Number(
+          data.rollingTurnover || 0
+        ).toLocaleString()}`
+      );
+
+      await loadSavedData();
+
+      const currentClient = savedClients.find((client) => client.id === selectedClientId);
+
+      if (currentClient) {
+        await openClient(currentClient);
+      }
+    } catch (error) {
+      setMessage(`Xero import failed: ${error instanceof Error ? error.message : String(error)}`);
     }
 
-    setMessage("Xero connection placeholder saved. Real OAuth is the next build step.");
-    await loadSavedData();
+    setImportingXero(false);
   }
 
   async function signUp() {
@@ -295,8 +303,6 @@ export default function VatDashboard() {
     0
   );
 
-  const exemptTotal = months.reduce((sum, month) => sum + month.exempt, 0);
-  const outOfScopeTotal = months.reduce((sum, month) => sum + month.out, 0);
   const thresholdRemaining = VAT_THRESHOLD - rollingTaxableTurnover;
   const thresholdUsed = (rollingTaxableTurnover / VAT_THRESHOLD) * 100;
   const forwardLookTriggered = expectedNext30Days > VAT_THRESHOLD;
@@ -377,11 +383,12 @@ export default function VatDashboard() {
       const { error: deleteError } = await supabase
         .from("turnover_entries")
         .delete()
-        .eq("client_id", clientId);
+        .eq("client_id", clientId)
+        .neq("source", "xero");
 
       if (deleteError) {
         setSaving(false);
-        setMessage(`Could not replace turnover entries: ${deleteError.message}`);
+        setMessage(`Could not replace manual turnover entries: ${deleteError.message}`);
         return;
       }
     } else {
@@ -458,6 +465,7 @@ export default function VatDashboard() {
       zero_rated: month.zero,
       exempt: month.exempt,
       out_of_scope: month.out,
+      source: "manual",
     }));
 
     const { error: turnoverError } = await supabase
@@ -617,7 +625,7 @@ export default function VatDashboard() {
             <div>
               <h2 className="text-xl font-bold">Saved clients</h2>
               <p className="text-sm text-slate-500">
-                Open a client to view, edit or review their VAT history.
+                Open a client to view, edit or import from Xero.
               </p>
             </div>
 
@@ -701,7 +709,7 @@ export default function VatDashboard() {
           <div className="mb-6 rounded-2xl bg-white p-6 shadow">
             <h2 className="text-xl font-bold">Accounting software connection</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Connect accounting software so sales income can be imported automatically.
+              Connect Xero and import invoice income automatically.
             </p>
 
             <div className="mt-4 rounded-2xl border bg-slate-50 p-4">
@@ -710,25 +718,30 @@ export default function VatDashboard() {
                   <h3 className="font-semibold">Xero</h3>
                   <p className="text-sm text-slate-600">
                     {selectedXeroConnection
-                      ? `Connected placeholder on ${new Date(
+                      ? `Connected on ${new Date(
                           selectedXeroConnection.connected_at
                         ).toLocaleDateString("en-GB")}`
                       : "Not connected yet."}
                   </p>
                 </div>
 
-                <button
-                  onClick={connectXeroPlaceholder}
-                  className="rounded-xl bg-blue-950 px-4 py-2 text-sm font-semibold text-white disabled:opacity-60"
-                  disabled={Boolean(selectedXeroConnection)}
-                >
-                  {selectedXeroConnection ? "Xero connected" : "Connect Xero"}
-                </button>
-              </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={connectXero}
+                    className="rounded-xl bg-blue-950 px-4 py-2 text-sm font-semibold text-white"
+                  >
+                    {selectedXeroConnection ? "Reconnect Xero" : "Connect Xero"}
+                  </button>
 
-              <p className="mt-3 text-xs text-slate-500">
-                This is the connection foundation only. The next build will replace this placeholder with real Xero OAuth authorisation.
-              </p>
+                  <button
+                    onClick={importFromXero}
+                    disabled={!selectedXeroConnection || importingXero}
+                    className="rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50"
+                  >
+                    {importingXero ? "Importing..." : "Import from Xero"}
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
         )}
