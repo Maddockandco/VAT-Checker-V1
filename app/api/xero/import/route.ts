@@ -3,6 +3,13 @@ import { NextResponse } from "next/server";
 
 const VAT_THRESHOLD = 90000;
 
+type VatCategory =
+  | "standard_rated"
+  | "reduced_rated"
+  | "zero_rated"
+  | "exempt"
+  | "out_of_scope";
+
 type MonthBucket = {
   month_label: string;
   month_key: string;
@@ -19,6 +26,7 @@ type XeroLineItem = {
 };
 
 type XeroInvoice = {
+  InvoiceID?: string;
   Type?: string;
   Status?: string;
   DateString?: string;
@@ -60,14 +68,10 @@ function getLastCompleted12Months(): MonthBucket[] {
   });
 }
 
-function classifyTaxType(taxType: string | undefined) {
+function classifyTaxType(taxType: string | undefined): VatCategory {
   const value = String(taxType || "").toUpperCase();
 
-  if (
-    value.includes("ZERO") ||
-    value.includes("ZERORATED") ||
-    value.includes("OUTPUT0")
-  ) {
+  if (value.includes("ZERO") || value.includes("ZERORATED") || value.includes("OUTPUT0")) {
     return "zero_rated";
   }
 
@@ -75,11 +79,7 @@ function classifyTaxType(taxType: string | undefined) {
     return "exempt";
   }
 
-  if (
-    value.includes("NONE") ||
-    value.includes("NOTAX") ||
-    value.includes("OUTOFSCOPE")
-  ) {
+  if (value.includes("NONE") || value.includes("NOTAX") || value.includes("OUTOFSCOPE")) {
     return "out_of_scope";
   }
 
@@ -120,11 +120,8 @@ async function refreshXeroToken(refreshToken: string) {
   return response.json();
 }
 
-async function fetchXeroInvoices(accessToken: string, tenantId: string) {
-  const invoiceUrl = new URL("https://api.xero.com/api.xro/2.0/Invoices");
-  invoiceUrl.searchParams.set("where", 'Type=="ACCREC"');
-
-  return fetch(invoiceUrl.toString(), {
+async function xeroFetch(url: string, accessToken: string, tenantId: string) {
+  return fetch(url, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Xero-tenant-id": tenantId,
@@ -173,12 +170,16 @@ export async function GET(request: Request) {
   let refreshToken = connection.refresh_token;
   let tokenWasRefreshed = false;
 
-  let response = await fetchXeroInvoices(
+  const listUrl = new URL("https://api.xero.com/api.xro/2.0/Invoices");
+  listUrl.searchParams.set("where", 'Type=="ACCREC"');
+
+  let listResponse = await xeroFetch(
+    listUrl.toString(),
     accessToken,
     connection.provider_tenant_id
   );
 
-  if (response.status === 401) {
+  if (listResponse.status === 401) {
     try {
       const refreshedToken = await refreshXeroToken(refreshToken);
 
@@ -197,7 +198,8 @@ export async function GET(request: Request) {
         })
         .eq("id", connection.id);
 
-      response = await fetchXeroInvoices(
+      listResponse = await xeroFetch(
+        listUrl.toString(),
         accessToken,
         connection.provider_tenant_id
       );
@@ -212,21 +214,19 @@ export async function GET(request: Request) {
     }
   }
 
-  if (!response.ok) {
-    const details = await response.text();
-
+  if (!listResponse.ok) {
     return NextResponse.json(
       {
-        error: "Xero invoice import failed",
-        status: response.status,
-        details,
+        error: "Xero invoice list failed",
+        status: listResponse.status,
+        details: await listResponse.text(),
       },
       { status: 400 }
     );
   }
 
-  const data = await response.json();
-  const invoices: XeroInvoice[] = data.Invoices || [];
+  const listData = await listResponse.json();
+  const summaryInvoices: XeroInvoice[] = listData.Invoices || [];
 
   const buckets = getLastCompleted12Months();
   const bucketMap = new Map<string, MonthBucket>();
@@ -237,8 +237,34 @@ export async function GET(request: Request) {
 
   let invoiceCount = 0;
   let importedLineCount = 0;
+  let skippedInvoiceCount = 0;
 
-  for (const invoice of invoices) {
+  for (const summaryInvoice of summaryInvoices) {
+    if (!summaryInvoice.InvoiceID) {
+      skippedInvoiceCount += 1;
+      continue;
+    }
+
+    const detailUrl = `https://api.xero.com/api.xro/2.0/Invoices/${summaryInvoice.InvoiceID}`;
+    const detailResponse = await xeroFetch(
+      detailUrl,
+      accessToken,
+      connection.provider_tenant_id
+    );
+
+    if (!detailResponse.ok) {
+      skippedInvoiceCount += 1;
+      continue;
+    }
+
+    const detailData = await detailResponse.json();
+    const invoice: XeroInvoice | undefined = detailData.Invoices?.[0];
+
+    if (!invoice) {
+      skippedInvoiceCount += 1;
+      continue;
+    }
+
     if (invoice.Type !== "ACCREC") continue;
     if (invoice.Status === "VOIDED" || invoice.Status === "DELETED") continue;
 
@@ -318,7 +344,7 @@ export async function GET(request: Request) {
       rolling_taxable_turnover: Number(rollingTaxableTurnover.toFixed(2)),
       expected_next_30_days: 0,
       risk_status: riskStatus,
-      advice_note: "Imported from Xero invoices.",
+      advice_note: "Imported from Xero invoice line items.",
     });
 
   if (reviewInsertError) {
@@ -332,10 +358,12 @@ export async function GET(request: Request) {
   }
 
   return NextResponse.json({
-    message: "Xero monthly import completed",
+    message: "Xero full invoice detail import completed",
     clientId,
     tokenWasRefreshed,
+    summaryInvoiceCount: summaryInvoices.length,
     invoiceCount,
+    skippedInvoiceCount,
     importedLineCount,
     rollingTaxableTurnover: Number(rollingTaxableTurnover.toFixed(2)),
     riskStatus,
