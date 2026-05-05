@@ -71,10 +71,7 @@ function classifyTaxType(taxType: string | undefined) {
     return "zero_rated";
   }
 
-  if (
-    value.includes("EXEMPT") ||
-    value.includes("EXEMPTOUTPUT")
-  ) {
+  if (value.includes("EXEMPT") || value.includes("EXEMPTOUTPUT")) {
     return "exempt";
   }
 
@@ -86,14 +83,54 @@ function classifyTaxType(taxType: string | undefined) {
     return "out_of_scope";
   }
 
-  if (
-    value.includes("REDUCED") ||
-    value.includes("OUTPUT5")
-  ) {
+  if (value.includes("REDUCED") || value.includes("OUTPUT5")) {
     return "reduced_rated";
   }
 
   return "standard_rated";
+}
+
+async function refreshXeroToken(refreshToken: string) {
+  const xeroClientId = process.env.XERO_CLIENT_ID;
+  const xeroClientSecret = process.env.XERO_CLIENT_SECRET;
+
+  if (!xeroClientId || !xeroClientSecret) {
+    throw new Error("Missing Xero client credentials");
+  }
+
+  const response = await fetch("https://identity.xero.com/connect/token", {
+    method: "POST",
+    headers: {
+      Authorization:
+        "Basic " +
+        Buffer.from(`${xeroClientId}:${xeroClientSecret}`).toString("base64"),
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Xero token refresh failed: ${details}`);
+  }
+
+  return response.json();
+}
+
+async function fetchXeroInvoices(accessToken: string, tenantId: string) {
+  const invoiceUrl = new URL("https://api.xero.com/api.xro/2.0/Invoices");
+  invoiceUrl.searchParams.set("where", 'Type=="ACCREC"');
+
+  return fetch(invoiceUrl.toString(), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Xero-tenant-id": tenantId,
+      Accept: "application/json",
+    },
+  });
 }
 
 export async function GET(request: Request) {
@@ -132,23 +169,48 @@ export async function GET(request: Request) {
     );
   }
 
-  const buckets = getLastCompleted12Months();
-  const bucketMap = new Map<string, MonthBucket>();
+  let accessToken = connection.access_token;
+  let refreshToken = connection.refresh_token;
+  let tokenWasRefreshed = false;
 
-  for (const bucket of buckets) {
-    bucketMap.set(bucket.month_key, bucket);
+  let response = await fetchXeroInvoices(
+    accessToken,
+    connection.provider_tenant_id
+  );
+
+  if (response.status === 401) {
+    try {
+      const refreshedToken = await refreshXeroToken(refreshToken);
+
+      accessToken = refreshedToken.access_token;
+      refreshToken = refreshedToken.refresh_token;
+      tokenWasRefreshed = true;
+
+      await supabase
+        .from("accounting_connections")
+        .update({
+          access_token: refreshedToken.access_token,
+          refresh_token: refreshedToken.refresh_token,
+          token_expires_at: new Date(
+            Date.now() + Number(refreshedToken.expires_in || 0) * 1000
+          ).toISOString(),
+        })
+        .eq("id", connection.id);
+
+      response = await fetchXeroInvoices(
+        accessToken,
+        connection.provider_tenant_id
+      );
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error: "Could not refresh Xero token",
+          details: error instanceof Error ? error.message : String(error),
+        },
+        { status: 401 }
+      );
+    }
   }
-
-  const invoiceUrl = new URL("https://api.xero.com/api.xro/2.0/Invoices");
-  invoiceUrl.searchParams.set("where", 'Type=="ACCREC"');
-
-  const response = await fetch(invoiceUrl.toString(), {
-    headers: {
-      Authorization: `Bearer ${connection.access_token}`,
-      "Xero-tenant-id": connection.provider_tenant_id,
-      Accept: "application/json",
-    },
-  });
 
   if (!response.ok) {
     const details = await response.text();
@@ -165,6 +227,13 @@ export async function GET(request: Request) {
 
   const data = await response.json();
   const invoices: XeroInvoice[] = data.Invoices || [];
+
+  const buckets = getLastCompleted12Months();
+  const bucketMap = new Map<string, MonthBucket>();
+
+  for (const bucket of buckets) {
+    bucketMap.set(bucket.month_key, bucket);
+  }
 
   let invoiceCount = 0;
   let importedLineCount = 0;
@@ -265,6 +334,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     message: "Xero monthly import completed",
     clientId,
+    tokenWasRefreshed,
     invoiceCount,
     importedLineCount,
     rollingTaxableTurnover: Number(rollingTaxableTurnover.toFixed(2)),
