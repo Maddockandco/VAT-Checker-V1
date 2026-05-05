@@ -18,6 +18,36 @@ type XeroInvoice = {
   LineItems?: XeroLineItem[];
 };
 
+async function refreshXeroToken(refreshToken: string) {
+  const xeroClientId = process.env.XERO_CLIENT_ID;
+  const xeroClientSecret = process.env.XERO_CLIENT_SECRET;
+
+  if (!xeroClientId || !xeroClientSecret) {
+    throw new Error("Missing Xero client credentials");
+  }
+
+  const response = await fetch("https://identity.xero.com/connect/token", {
+    method: "POST",
+    headers: {
+      Authorization:
+        "Basic " +
+        Buffer.from(`${xeroClientId}:${xeroClientSecret}`).toString("base64"),
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+
+  if (!response.ok) {
+    const details = await response.text();
+    throw new Error(`Xero token refresh failed: ${details}`);
+  }
+
+  return response.json();
+}
+
 async function xeroFetch(url: string, accessToken: string, tenantId: string) {
   return fetch(url, {
     headers: {
@@ -57,14 +87,53 @@ export async function GET(request: Request) {
     });
   }
 
+  let accessToken = connection.access_token;
+  let refreshToken = connection.refresh_token;
+  let tokenWasRefreshed = false;
+
   const listUrl = new URL("https://api.xero.com/api.xro/2.0/Invoices");
   listUrl.searchParams.set("where", 'Type=="ACCREC"');
 
-  const listResponse = await xeroFetch(
+  let listResponse = await xeroFetch(
     listUrl.toString(),
-    connection.access_token,
+    accessToken,
     connection.provider_tenant_id
   );
+
+  if (listResponse.status === 401) {
+    try {
+      const refreshedToken = await refreshXeroToken(refreshToken);
+
+      accessToken = refreshedToken.access_token;
+      refreshToken = refreshedToken.refresh_token;
+      tokenWasRefreshed = true;
+
+      await supabase
+        .from("accounting_connections")
+        .update({
+          access_token: refreshedToken.access_token,
+          refresh_token: refreshedToken.refresh_token,
+          token_expires_at: new Date(
+            Date.now() + Number(refreshedToken.expires_in || 0) * 1000
+          ).toISOString(),
+        })
+        .eq("id", connection.id);
+
+      listResponse = await xeroFetch(
+        listUrl.toString(),
+        accessToken,
+        connection.provider_tenant_id
+      );
+    } catch (error) {
+      return NextResponse.json(
+        {
+          error: "Could not refresh Xero token",
+          details: error instanceof Error ? error.message : String(error),
+        },
+        { status: 401 }
+      );
+    }
+  }
 
   if (!listResponse.ok) {
     return NextResponse.json({
@@ -77,7 +146,7 @@ export async function GET(request: Request) {
   const listData = await listResponse.json();
   const summaryInvoices: XeroInvoice[] = listData.Invoices || [];
 
-  const taxSamples: any[] = [];
+  const taxSamples: unknown[] = [];
   const taxTotals: Record<string, number> = {};
 
   for (const summaryInvoice of summaryInvoices.slice(0, 20)) {
@@ -87,7 +156,7 @@ export async function GET(request: Request) {
 
     const detailResponse = await xeroFetch(
       detailUrl,
-      connection.access_token,
+      accessToken,
       connection.provider_tenant_id
     );
 
@@ -118,6 +187,7 @@ export async function GET(request: Request) {
 
   return NextResponse.json({
     message: "Xero tax debug complete",
+    tokenWasRefreshed,
     summaryInvoiceCount: summaryInvoices.length,
     sampledLineCount: taxSamples.length,
     taxTotals,
