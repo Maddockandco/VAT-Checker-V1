@@ -18,14 +18,7 @@ export async function GET(request: Request) {
     );
   }
 
-  const scope = [
-    "openid",
-    "profile",
-    "email",
-    "offline_access",
-    "accounting.transactions",
-    "accounting.settings",
-  ].join(" ");
+  const scope = ["openid", "profile", "email"].join(" ");
 
   const url =
     "https://login.xero.com/identity/connect/authorize" +
