@@ -23,8 +23,8 @@ export async function GET(request: Request) {
     "profile",
     "email",
     "offline_access",
-    "accounting.transactions.read",
-    "accounting.settings.read",
+    "accounting.transactions",
+    "accounting.settings",
   ].join(" ");
 
   const url =
