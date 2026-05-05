@@ -8,7 +8,7 @@ export async function GET(request: Request) {
 
   if (!code || !clientId) {
     return NextResponse.json(
-      { error: "Missing Xero code or client state" },
+      { error: "Missing Xero code or client state", code, clientId },
       { status: 400 }
     );
   }
@@ -42,9 +42,9 @@ export async function GET(request: Request) {
   });
 
   if (!tokenResponse.ok) {
-    const errorText = await tokenResponse.text();
+    const details = await tokenResponse.text();
     return NextResponse.json(
-      { error: "Xero token exchange failed", details: errorText },
+      { error: "Xero token exchange failed", details },
       { status: 400 }
     );
   }
@@ -58,9 +58,9 @@ export async function GET(request: Request) {
   });
 
   if (!connectionsResponse.ok) {
-    const errorText = await connectionsResponse.text();
+    const details = await connectionsResponse.text();
     return NextResponse.json(
-      { error: "Xero connections lookup failed", details: errorText },
+      { error: "Xero connections lookup failed", details },
       { status: 400 }
     );
   }
@@ -70,14 +70,14 @@ export async function GET(request: Request) {
 
   if (!firstConnection?.tenantId) {
     return NextResponse.json(
-      { error: "No Xero tenant found" },
+      { error: "No Xero tenant found", connections },
       { status: 400 }
     );
   }
 
   const supabase = createClient(supabaseUrl, supabaseKey);
 
-  await supabase.from("accounting_connections").insert({
+  const { error } = await supabase.from("accounting_connections").insert({
     client_id: clientId,
     provider: "xero",
     provider_tenant_id: firstConnection.tenantId,
@@ -85,6 +85,13 @@ export async function GET(request: Request) {
     refresh_token: tokenData.refresh_token,
     token_expires_at: new Date(Date.now() + tokenData.expires_in * 1000).toISOString(),
   });
+
+  if (error) {
+    return NextResponse.json(
+      { error: "Supabase insert failed", details: error.message },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.redirect(`${url.origin}/dashboard?xero=connected`);
 }
