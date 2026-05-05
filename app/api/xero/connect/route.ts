@@ -19,12 +19,13 @@ export async function GET(request: Request) {
   }
 
   const scope = [
+    "openid",
+    "profile",
+    "email",
     "offline_access",
-    "accounting.transactions",
+    "accounting.transactions.read",
     "accounting.settings.read",
   ].join(" ");
-
-  const state = encodeURIComponent(clientId);
 
   const url =
     "https://login.xero.com/identity/connect/authorize" +
@@ -32,7 +33,7 @@ export async function GET(request: Request) {
     `&client_id=${encodeURIComponent(xeroClientId)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&scope=${encodeURIComponent(scope)}` +
-    `&state=${state}`;
+    `&state=${encodeURIComponent(clientId)}`;
 
   return NextResponse.redirect(url);
 }
