@@ -96,7 +96,9 @@ export default function VatDashboard() {
 
   const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
-  const [accountingConnections, setAccountingConnections] = useState<AccountingConnection[]>([]);
+  const [accountingConnections, setAccountingConnections] = useState<
+    AccountingConnection[]
+  >([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
 
   const [months, setMonths] = useState<MonthRow[]>(getLastCompleted12Months());
@@ -159,7 +161,9 @@ export default function VatDashboard() {
 
     const { data: entries } = await supabase
       .from("turnover_entries")
-      .select("month_label,standard_rated,reduced_rated,zero_rated,exempt,out_of_scope")
+      .select(
+        "month_label,standard_rated,reduced_rated,zero_rated,exempt,out_of_scope"
+      )
       .eq("client_id", client.id);
 
     const loadedMonths = baseMonths.map((month) => {
@@ -212,7 +216,9 @@ export default function VatDashboard() {
     setMessage("Importing Xero invoices...");
 
     try {
-      const response = await fetch(`/api/xero/import?clientId=${selectedClientId}`);
+      const response = await fetch(
+        `/api/xero/import?clientId=${selectedClientId}`
+      );
       const data = await response.json();
 
       if (!response.ok) {
@@ -229,13 +235,19 @@ export default function VatDashboard() {
 
       await loadSavedData();
 
-      const currentClient = savedClients.find((client) => client.id === selectedClientId);
+      const currentClient = savedClients.find(
+        (client) => client.id === selectedClientId
+      );
 
       if (currentClient) {
         await openClient(currentClient);
       }
     } catch (error) {
-      setMessage(`Xero import failed: ${error instanceof Error ? error.message : String(error)}`);
+      setMessage(
+        `Xero import failed: ${
+          error instanceof Error ? error.message : String(error)
+        }`
+      );
     }
 
     setImportingXero(false);
@@ -333,10 +345,15 @@ export default function VatDashboard() {
 
   function reviewsForSelectedClient() {
     if (!selectedClientId) return [];
-    return savedReviews.filter((review) => review.client_id === selectedClientId);
+    return savedReviews.filter(
+      (review) => review.client_id === selectedClientId
+    );
   }
 
-  function connectionForClient(clientId: string, provider: "xero" | "quickbooks" | "freeagent") {
+  function connectionForClient(
+    clientId: string,
+    provider: "xero" | "quickbooks" | "freeagent"
+  ) {
     return accountingConnections.find(
       (connection) =>
         connection.client_id === clientId && connection.provider === provider
@@ -388,7 +405,9 @@ export default function VatDashboard() {
 
       if (deleteError) {
         setSaving(false);
-        setMessage(`Could not replace manual turnover entries: ${deleteError.message}`);
+        setMessage(
+          `Could not replace manual turnover entries: ${deleteError.message}`
+        );
         return;
       }
     } else {
@@ -404,7 +423,9 @@ export default function VatDashboard() {
 
       if (profileError || !profile) {
         setSaving(false);
-        setMessage(`Profile save failed: ${profileError?.message || "Unknown error"}`);
+        setMessage(
+          `Profile save failed: ${profileError?.message || "Unknown error"}`
+        );
         return;
       }
 
@@ -449,7 +470,9 @@ export default function VatDashboard() {
 
       if (clientError || !client) {
         setSaving(false);
-        setMessage(`Client save failed: ${clientError?.message || "Unknown error"}`);
+        setMessage(
+          `Client save failed: ${clientError?.message || "Unknown error"}`
+        );
         return;
       }
 
@@ -492,7 +515,11 @@ export default function VatDashboard() {
       return;
     }
 
-    setMessage(selectedClientId ? "Client updated successfully." : "New client saved successfully.");
+    setMessage(
+      selectedClientId
+        ? "Client updated successfully."
+        : "New client saved successfully."
+    );
     await loadSavedData();
   }
 
@@ -564,7 +591,9 @@ export default function VatDashboard() {
 
   const selectedClientReviews = reviewsForSelectedClient();
   const rollingPeriod =
-    months.length > 0 ? `${months[0].month} to ${months[months.length - 1].month}` : "";
+    months.length > 0
+      ? `${months[0].month} to ${months[months.length - 1].month}`
+      : "";
 
   const selectedXeroConnection = selectedClientId
     ? connectionForClient(selectedClientId, "xero")
@@ -596,7 +625,9 @@ export default function VatDashboard() {
         <div className="mb-6 grid gap-6 md:grid-cols-5">
           <div className="rounded-xl bg-white p-4 shadow">
             <p className="text-sm text-gray-500">Rolling taxable turnover</p>
-            <p className="text-2xl font-bold">£{rollingTaxableTurnover.toLocaleString()}</p>
+            <p className="text-2xl font-bold">
+              £{rollingTaxableTurnover.toLocaleString()}
+            </p>
           </div>
 
           <div className="rounded-xl bg-white p-4 shadow">
@@ -606,12 +637,16 @@ export default function VatDashboard() {
 
           <div className="rounded-xl bg-white p-4 shadow">
             <p className="text-sm text-gray-500">Remaining</p>
-            <p className="text-2xl font-bold">£{thresholdRemaining.toLocaleString()}</p>
+            <p className="text-2xl font-bold">
+              £{thresholdRemaining.toLocaleString()}
+            </p>
           </div>
 
           <div className="rounded-xl bg-white p-4 shadow">
             <p className="text-sm text-gray-500">30-day forecast</p>
-            <p className="text-2xl font-bold">£{expectedNext30Days.toLocaleString()}</p>
+            <p className="text-2xl font-bold">
+              £{expectedNext30Days.toLocaleString()}
+            </p>
           </div>
 
           <div className="rounded-xl bg-white p-4 shadow">
@@ -623,9 +658,9 @@ export default function VatDashboard() {
         <div className="mb-6 rounded-2xl bg-white p-6 shadow">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h2 className="text-xl font-bold">Saved clients</h2>
+              <h2 className="text-xl font-bold">Multi-client VAT dashboard</h2>
               <p className="text-sm text-slate-500">
-                Open a client to view, edit or import from Xero.
+                See all clients, latest turnover, threshold usage and VAT risk.
               </p>
             </div>
 
@@ -657,6 +692,7 @@ export default function VatDashboard() {
                     <th className="p-2">Client</th>
                     <th className="p-2">Sector</th>
                     <th className="p-2">Latest turnover</th>
+                    <th className="p-2">% threshold</th>
                     <th className="p-2">Latest risk</th>
                     <th className="p-2">Xero</th>
                     <th className="p-2">Action</th>
@@ -665,18 +701,30 @@ export default function VatDashboard() {
                 <tbody>
                   {savedClients.map((client) => {
                     const review = latestReviewForClient(client.id);
+                    const turnover = Number(
+                      review?.rolling_taxable_turnover || 0
+                    );
+                    const percent = (turnover / VAT_THRESHOLD) * 100;
                     const xeroConnection = connectionForClient(client.id, "xero");
+
+                    const rowRiskColour =
+                      turnover >= VAT_THRESHOLD
+                        ? "text-red-700"
+                        : turnover >= VAT_THRESHOLD * 0.9
+                        ? "text-orange-700"
+                        : turnover >= VAT_THRESHOLD * 0.8
+                        ? "text-yellow-700"
+                        : "text-green-700";
 
                     return (
                       <tr key={client.id} className="border-b">
                         <td className="p-2 font-medium">{client.name}</td>
                         <td className="p-2">{client.sector || "-"}</td>
-                        <td className="p-2">
-                          {review
-                            ? `£${Number(review.rolling_taxable_turnover).toLocaleString()}`
-                            : "-"}
+                        <td className="p-2">£{turnover.toLocaleString()}</td>
+                        <td className="p-2">{percent.toFixed(1)}%</td>
+                        <td className={`p-2 font-semibold ${rowRiskColour}`}>
+                          {review?.risk_status || "No review"}
                         </td>
-                        <td className="p-2">{review?.risk_status || "-"}</td>
                         <td className="p-2">
                           {xeroConnection ? (
                             <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
@@ -770,16 +818,24 @@ export default function VatDashboard() {
                   </thead>
                   <tbody>
                     {selectedClientReviews.map((review, index) => (
-                      <tr key={review.id} className={index === 0 ? "border-b bg-blue-50" : "border-b"}>
+                      <tr
+                        key={review.id}
+                        className={index === 0 ? "border-b bg-blue-50" : "border-b"}
+                      >
                         <td className="p-2">
                           {new Date(review.created_at).toLocaleString("en-GB")}
                         </td>
                         <td className="p-2 font-semibold">
-                          £{Number(review.rolling_taxable_turnover).toLocaleString()}
+                          £
+                          {Number(
+                            review.rolling_taxable_turnover
+                          ).toLocaleString()}
                         </td>
                         <td className="p-2">{review.risk_status}</td>
                         <td className="p-2">
-                          {index === 0 ? "Latest review" : `Previous review ${index}`}
+                          {index === 0
+                            ? "Latest review"
+                            : `Previous review ${index}`}
                         </td>
                       </tr>
                     ))}
@@ -824,7 +880,9 @@ export default function VatDashboard() {
               type="number"
               className="mt-1 w-full rounded border p-2"
               value={expectedNext30Days}
-              onChange={(e) => setExpectedNext30Days(Number(e.target.value || 0))}
+              onChange={(e) =>
+                setExpectedNext30Days(Number(e.target.value || 0))
+              }
             />
           </div>
         </div>
@@ -870,7 +928,12 @@ export default function VatDashboard() {
                     )
                   )}
                   <td className="p-2 font-semibold">
-                    £{(month.standard + month.reduced + month.zero).toLocaleString()}
+                    £
+                    {(
+                      month.standard +
+                      month.reduced +
+                      month.zero
+                    ).toLocaleString()}
                   </td>
                 </tr>
               ))}
@@ -879,7 +942,9 @@ export default function VatDashboard() {
         </div>
 
         <div className="mt-6 rounded-2xl bg-white p-5 text-sm text-slate-700 shadow">
-          <strong>VAT logic:</strong> Standard-rated, reduced-rated and zero-rated income are included in taxable turnover. Exempt and out-of-scope income are excluded from the VAT registration threshold calculation.
+          <strong>VAT logic:</strong> Standard-rated, reduced-rated and zero-rated
+          income are included in taxable turnover. Exempt and out-of-scope income
+          are excluded from the VAT registration threshold calculation.
         </div>
 
         <button
