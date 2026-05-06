@@ -1,6 +1,25 @@
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
+const VAT_THRESHOLD = 90000;
+
+type VatCategory =
+  | "standard_rated"
+  | "reduced_rated"
+  | "zero_rated"
+  | "exempt"
+  | "out_of_scope";
+
+type MonthBucket = {
+  month_label: string;
+  month_key: string;
+  standard_rated: number;
+  reduced_rated: number;
+  zero_rated: number;
+  exempt: number;
+  out_of_scope: number;
+};
+
 type XeroLineItem = {
   Description?: string;
   LineAmount?: number;
@@ -16,8 +35,6 @@ type XeroInvoice = {
   Status?: string;
   DateString?: string;
   Date?: string;
-  Total?: number;
-  TotalTax?: number;
   LineItems?: XeroLineItem[];
 };
 
@@ -27,11 +44,6 @@ type XeroBankTransaction = {
   Status?: string;
   DateString?: string;
   Date?: string;
-  Total?: number;
-  TotalTax?: number;
-  Contact?: {
-    Name?: string;
-  };
   LineItems?: XeroLineItem[];
 };
 
@@ -49,6 +61,96 @@ type XeroManualJournal = {
   Status?: string;
   JournalLines?: XeroManualJournalLine[];
 };
+
+function parseXeroDate(value: string | undefined): Date | null {
+  if (!value) return null;
+
+  const match = value.match(/\/Date\((\d+)/);
+  if (match?.[1]) {
+    return new Date(Number(match[1]));
+  }
+
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatMonthLabel(date: Date) {
+  return date.toLocaleString("en-GB", {
+    month: "short",
+    year: "numeric",
+  });
+}
+
+function monthKey(date: Date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getLastCompleted12Months(): MonthBucket[] {
+  const today = new Date();
+  const endMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+
+  return Array.from({ length: 12 }, (_, index) => {
+    const monthDate = new Date(
+      endMonth.getFullYear(),
+      endMonth.getMonth() - (11 - index),
+      1
+    );
+
+    return {
+      month_label: formatMonthLabel(monthDate),
+      month_key: monthKey(monthDate),
+      standard_rated: 0,
+      reduced_rated: 0,
+      zero_rated: 0,
+      exempt: 0,
+      out_of_scope: 0,
+    };
+  });
+}
+
+function classifyTaxType(taxType: string | undefined): VatCategory {
+  const value = String(taxType || "").toUpperCase();
+
+  if (value.includes("ZERO") || value.includes("ZERORATED")) {
+    return "zero_rated";
+  }
+
+  if (value.includes("EXEMPT")) {
+    return "exempt";
+  }
+
+  if (value.includes("REDUCED") || value.includes("OUTPUT5")) {
+    return "reduced_rated";
+  }
+
+  if (value.includes("OUTOFSCOPE")) {
+    return "out_of_scope";
+  }
+
+  return "standard_rated";
+}
+
+function safeNumber(value: unknown) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function isRevenueAccount(accountCode: string | undefined) {
+  if (!accountCode) return false;
+
+  const code = Number(String(accountCode).replace(/\D/g, ""));
+
+  return code >= 200 && code < 999;
+}
+
+function addToBucket(
+  bucket: MonthBucket,
+  amount: number,
+  taxType: string | undefined
+) {
+  const category = classifyTaxType(taxType);
+  bucket[category] += Math.abs(amount);
+}
 
 async function refreshXeroToken(refreshToken: string) {
   const xeroClientId = process.env.XERO_CLIENT_ID;
@@ -73,8 +175,7 @@ async function refreshXeroToken(refreshToken: string) {
   });
 
   if (!response.ok) {
-    const details = await response.text();
-    throw new Error(`Xero token refresh failed: ${details}`);
+    throw new Error(await response.text());
   }
 
   return response.json();
@@ -90,23 +191,59 @@ async function xeroFetch(url: string, accessToken: string, tenantId: string) {
   });
 }
 
-function summariseLineItems(lineItems: XeroLineItem[] | undefined) {
-  return (lineItems || []).slice(0, 10).map((line) => ({
-    description: line.Description || null,
-    lineAmount: line.LineAmount ?? null,
-    accountCode: line.AccountCode || null,
-    taxType: line.TaxType || null,
-    taxAmount: line.TaxAmount ?? null,
-  }));
-}
+async function sendVatAlertEmail(params: {
+  clientName: string;
+  turnover: number;
+  percent: number;
+  alertType: string;
+  message: string;
+}) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = process.env.VAT_ALERT_EMAIL_TO;
+  const from =
+    process.env.VAT_ALERT_EMAIL_FROM || "VAT Checker <onboarding@resend.dev>";
 
-function summariseJournalLines(lines: XeroManualJournalLine[] | undefined) {
-  return (lines || []).slice(0, 10).map((line) => ({
-    description: line.Description || null,
-    lineAmount: line.LineAmount ?? null,
-    accountCode: line.AccountCode || null,
-    taxType: line.TaxType || null,
-  }));
+  if (!apiKey || !to) {
+    return {
+      sent: false,
+      reason: "Missing Resend configuration",
+    };
+  }
+
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from,
+      to,
+      subject: `VAT Alert - ${params.clientName}`,
+      html: `
+        <h2>VAT Threshold Alert</h2>
+        <p><strong>Client:</strong> ${params.clientName}</p>
+        <p><strong>Alert Type:</strong> ${params.alertType}</p>
+        <p><strong>Rolling Taxable Turnover:</strong> £${params.turnover.toLocaleString()}</p>
+        <p><strong>Threshold Used:</strong> ${params.percent.toFixed(1)}%</p>
+        <p>${params.message}</p>
+        <hr />
+        <p style="font-size:12px;color:#666;">Generated automatically by VAT Checker.</p>
+      `,
+    }),
+  });
+
+  if (!response.ok) {
+    return {
+      sent: false,
+      reason: await response.text(),
+    };
+  }
+
+  return {
+    sent: true,
+    reason: "Email sent",
+  };
 }
 
 export async function GET(request: Request) {
@@ -118,17 +255,16 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
 
-    if (!supabaseUrl || !supabaseKey) {
-      return NextResponse.json(
-        { error: "Missing Supabase server environment variables" },
-        { status: 500 }
-      );
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    const { data: client } = await supabase
+      .from("clients")
+      .select("id,name")
+      .eq("id", clientId)
+      .single();
 
     const { data: connection, error: connectionError } = await supabase
       .from("accounting_connections")
@@ -188,145 +324,348 @@ export async function GET(request: Request) {
       return response;
     }
 
-    const invoiceUrl =
-      'https://api.xero.com/api.xro/2.0/Invoices?where=Type=="ACCREC"';
+    const buckets = getLastCompleted12Months();
+    const bucketMap = new Map<string, MonthBucket>();
 
-    const bankTransactionUrl =
-      "https://api.xero.com/api.xro/2.0/BankTransactions";
+    buckets.forEach((bucket) => {
+      bucketMap.set(bucket.month_key, bucket);
+    });
 
-    const manualJournalUrl =
-      "https://api.xero.com/api.xro/2.0/ManualJournals";
+    let invoiceCount = 0;
+    let invoiceLineCount = 0;
+    let bankTransactionCount = 0;
+    let bankLineCount = 0;
+    let manualJournalCount = 0;
+    let manualJournalLineCount = 0;
+    let skippedBankTransfers = 0;
 
-    const [invoiceResponse, bankResponse, journalResponse] = await Promise.all([
-      fetchWithRefresh(invoiceUrl),
-      fetchWithRefresh(bankTransactionUrl),
-      fetchWithRefresh(manualJournalUrl),
-    ]);
+    const invoiceListResponse = await fetchWithRefresh(
+      'https://api.xero.com/api.xro/2.0/Invoices?where=Type=="ACCREC"'
+    );
 
-    const invoiceText = invoiceResponse.ok ? "" : await invoiceResponse.text();
-    const bankText = bankResponse.ok ? "" : await bankResponse.text();
-    const journalText = journalResponse.ok ? "" : await journalResponse.text();
+    if (!invoiceListResponse.ok) {
+      return NextResponse.json(
+        {
+          error: "Invoice list import failed",
+          status: invoiceListResponse.status,
+          details: await invoiceListResponse.text(),
+        },
+        { status: 400 }
+      );
+    }
 
-    const invoiceData = invoiceResponse.ok ? await invoiceResponse.json() : {};
-    const bankData = bankResponse.ok ? await bankResponse.json() : {};
-    const journalData = journalResponse.ok ? await journalResponse.json() : {};
+    const invoiceListData = await invoiceListResponse.json();
+    const invoiceSummaries: XeroInvoice[] = invoiceListData.Invoices || [];
 
-    const invoices: XeroInvoice[] = invoiceData.Invoices || [];
-    const bankTransactions: XeroBankTransaction[] =
-      bankData.BankTransactions || [];
-    const manualJournals: XeroManualJournal[] =
-      journalData.ManualJournals || [];
+    for (const invoiceSummary of invoiceSummaries) {
+      if (!invoiceSummary.InvoiceID) continue;
 
-    const invoiceAccountCodes: Record<string, number> = {};
-    const invoiceTaxTypes: Record<string, number> = {};
-    const bankAccountCodes: Record<string, number> = {};
-    const bankTaxTypes: Record<string, number> = {};
-    const journalAccountCodes: Record<string, number> = {};
-    const journalTaxTypes: Record<string, number> = {};
+      const detailResponse = await fetchWithRefresh(
+        `https://api.xero.com/api.xro/2.0/Invoices/${invoiceSummary.InvoiceID}`
+      );
 
-    for (const invoice of invoices) {
+      if (!detailResponse.ok) continue;
+
+      const detailData = await detailResponse.json();
+      const invoice: XeroInvoice | undefined = detailData.Invoices?.[0];
+
+      if (!invoice) continue;
+      if (invoice.Type !== "ACCREC") continue;
+      if (invoice.Status === "VOIDED" || invoice.Status === "DELETED") continue;
+
+      const invoiceDate = parseXeroDate(invoice.DateString || invoice.Date);
+      if (!invoiceDate) continue;
+
+      const bucket = bucketMap.get(monthKey(invoiceDate));
+      if (!bucket) continue;
+
       for (const line of invoice.LineItems || []) {
-        const accountCode = line.AccountCode || "NO_ACCOUNT_CODE";
-        const taxType = line.TaxType || "NO_TAX_TYPE";
-        invoiceAccountCodes[accountCode] =
-          (invoiceAccountCodes[accountCode] || 0) + Number(line.LineAmount || 0);
-        invoiceTaxTypes[taxType] =
-          (invoiceTaxTypes[taxType] || 0) + Number(line.LineAmount || 0);
+        const amount = safeNumber(line.LineAmount);
+        if (amount === 0) continue;
+
+        addToBucket(bucket, amount, line.TaxType);
+        invoiceLineCount += 1;
       }
+
+      invoiceCount += 1;
     }
 
-    for (const transaction of bankTransactions) {
+    const bankListResponse = await fetchWithRefresh(
+      "https://api.xero.com/api.xro/2.0/BankTransactions"
+    );
+
+    if (!bankListResponse.ok) {
+      return NextResponse.json(
+        {
+          error: "Bank transaction list import failed",
+          status: bankListResponse.status,
+          details: await bankListResponse.text(),
+        },
+        { status: 400 }
+      );
+    }
+
+    const bankListData = await bankListResponse.json();
+    const bankSummaries: XeroBankTransaction[] =
+      bankListData.BankTransactions || [];
+
+    const relevantBankSummaries = bankSummaries.filter((transaction) => {
+      if (!transaction.BankTransactionID) return false;
+      if (transaction.Type !== "RECEIVE") return false;
+      if (transaction.Status === "VOIDED" || transaction.Status === "DELETED") {
+        return false;
+      }
+
+      const transactionDate = parseXeroDate(
+        transaction.DateString || transaction.Date
+      );
+
+      if (!transactionDate) return false;
+
+      return bucketMap.has(monthKey(transactionDate));
+    });
+
+    for (const bankSummary of relevantBankSummaries) {
+      if (!bankSummary.BankTransactionID) continue;
+
+      const detailResponse = await fetchWithRefresh(
+        `https://api.xero.com/api.xro/2.0/BankTransactions/${bankSummary.BankTransactionID}`
+      );
+
+      if (!detailResponse.ok) continue;
+
+      const detailData = await detailResponse.json();
+      const transaction: XeroBankTransaction | undefined =
+        detailData.BankTransactions?.[0];
+
+      if (!transaction) continue;
+      if (transaction.Type !== "RECEIVE") continue;
+
+      const transactionDate = parseXeroDate(
+        transaction.DateString || transaction.Date
+      );
+
+      if (!transactionDate) continue;
+
+      const bucket = bucketMap.get(monthKey(transactionDate));
+      if (!bucket) continue;
+
+      let countedThisTransaction = false;
+
       for (const line of transaction.LineItems || []) {
-        const accountCode = line.AccountCode || "NO_ACCOUNT_CODE";
-        const taxType = line.TaxType || "NO_TAX_TYPE";
-        bankAccountCodes[accountCode] =
-          (bankAccountCodes[accountCode] || 0) + Number(line.LineAmount || 0);
-        bankTaxTypes[taxType] =
-          (bankTaxTypes[taxType] || 0) + Number(line.LineAmount || 0);
+        if (!isRevenueAccount(line.AccountCode)) continue;
+
+        const amount = safeNumber(line.LineAmount);
+        if (amount === 0) continue;
+
+        addToBucket(bucket, amount, line.TaxType);
+        bankLineCount += 1;
+        countedThisTransaction = true;
+      }
+
+      if (countedThisTransaction) {
+        bankTransactionCount += 1;
+      } else {
+        skippedBankTransfers += 1;
       }
     }
 
-    for (const journal of manualJournals) {
+    const manualJournalListResponse = await fetchWithRefresh(
+      "https://api.xero.com/api.xro/2.0/ManualJournals"
+    );
+
+    if (!manualJournalListResponse.ok) {
+      return NextResponse.json(
+        {
+          error: "Manual journal list import failed",
+          status: manualJournalListResponse.status,
+          details: await manualJournalListResponse.text(),
+        },
+        { status: 400 }
+      );
+    }
+
+    const manualJournalListData = await manualJournalListResponse.json();
+    const manualJournalSummaries: XeroManualJournal[] =
+      manualJournalListData.ManualJournals || [];
+
+    const relevantManualJournals = manualJournalSummaries.filter((journal) => {
+      if (!journal.ManualJournalID) return false;
+      if (journal.Status !== "POSTED") return false;
+
+      const journalDate = parseXeroDate(journal.Date);
+      if (!journalDate) return false;
+
+      return bucketMap.has(monthKey(journalDate));
+    });
+
+    for (const journalSummary of relevantManualJournals) {
+      if (!journalSummary.ManualJournalID) continue;
+
+      const detailResponse = await fetchWithRefresh(
+        `https://api.xero.com/api.xro/2.0/ManualJournals/${journalSummary.ManualJournalID}`
+      );
+
+      if (!detailResponse.ok) continue;
+
+      const detailData = await detailResponse.json();
+      const journal: XeroManualJournal | undefined =
+        detailData.ManualJournals?.[0];
+
+      if (!journal) continue;
+      if (journal.Status !== "POSTED") continue;
+
+      const journalDate = parseXeroDate(journal.Date);
+      if (!journalDate) continue;
+
+      const bucket = bucketMap.get(monthKey(journalDate));
+      if (!bucket) continue;
+
+      let countedThisJournal = false;
+
       for (const line of journal.JournalLines || []) {
-        const accountCode = line.AccountCode || "NO_ACCOUNT_CODE";
-        const taxType = line.TaxType || "NO_TAX_TYPE";
-        journalAccountCodes[accountCode] =
-          (journalAccountCodes[accountCode] || 0) + Number(line.LineAmount || 0);
-        journalTaxTypes[taxType] =
-          (journalTaxTypes[taxType] || 0) + Number(line.LineAmount || 0);
+        if (!isRevenueAccount(line.AccountCode)) continue;
+
+        const amount = safeNumber(line.LineAmount);
+        if (amount === 0) continue;
+
+        addToBucket(bucket, amount, line.TaxType);
+        manualJournalLineCount += 1;
+        countedThisJournal = true;
       }
+
+      if (countedThisJournal) {
+        manualJournalCount += 1;
+      }
+    }
+
+    const rollingTurnover = buckets.reduce(
+      (sum, bucket) =>
+        sum + bucket.standard_rated + bucket.reduced_rated + bucket.zero_rated,
+      0
+    );
+
+    const thresholdPercent = (rollingTurnover / VAT_THRESHOLD) * 100;
+
+    const riskStatus =
+      rollingTurnover >= VAT_THRESHOLD
+        ? "Registration Required"
+        : rollingTurnover >= VAT_THRESHOLD * 0.9
+        ? "High Risk"
+        : rollingTurnover >= VAT_THRESHOLD * 0.8
+        ? "Warning"
+        : "Low Risk";
+
+    await supabase
+      .from("turnover_entries")
+      .delete()
+      .eq("client_id", clientId)
+      .eq("source", "xero");
+
+    const turnoverRows = buckets.map((bucket) => ({
+      client_id: clientId,
+      month_label: bucket.month_label,
+      standard_rated: Number(bucket.standard_rated.toFixed(2)),
+      reduced_rated: Number(bucket.reduced_rated.toFixed(2)),
+      zero_rated: Number(bucket.zero_rated.toFixed(2)),
+      exempt: Number(bucket.exempt.toFixed(2)),
+      out_of_scope: Number(bucket.out_of_scope.toFixed(2)),
+      source: "xero",
+    }));
+
+    const { error: turnoverInsertError } = await supabase
+      .from("turnover_entries")
+      .insert(turnoverRows);
+
+    if (turnoverInsertError) {
+      return NextResponse.json(
+        {
+          error: "Could not save imported turnover",
+          details: turnoverInsertError.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    const { error: reviewInsertError } = await supabase
+      .from("vat_reviews")
+      .insert({
+        client_id: clientId,
+        rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
+        expected_next_30_days: 0,
+        risk_status: riskStatus,
+        advice_note:
+          "Auto-imported from detailed Xero invoices, bank transactions and manual journals.",
+      });
+
+    if (reviewInsertError) {
+      return NextResponse.json(
+        {
+          error: "Could not save VAT review",
+          details: reviewInsertError.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    let alertType: string | null = null;
+    let alertMessage = "";
+    let emailResult: { sent: boolean; reason: string } | null = null;
+
+    if (thresholdPercent >= 100) {
+      alertType = "BREACH";
+      alertMessage =
+        "VAT threshold exceeded – registration required immediately.";
+    } else if (thresholdPercent >= 90) {
+      alertType = "HIGH";
+      alertMessage = "VAT turnover above 90% – urgent review required.";
+    } else if (thresholdPercent >= 80) {
+      alertType = "WARNING";
+      alertMessage = "VAT turnover above 80% – monitor closely.";
+    }
+
+    if (alertType) {
+      await supabase.from("vat_alerts").insert({
+        client_id: clientId,
+        threshold_percentage: Number(thresholdPercent.toFixed(2)),
+        alert_type: alertType,
+        message: alertMessage,
+      });
+
+      emailResult = await sendVatAlertEmail({
+        clientName: client?.name || "Unknown client",
+        turnover: Number(rollingTurnover.toFixed(2)),
+        percent: thresholdPercent,
+        alertType,
+        message: alertMessage,
+      });
     }
 
     return NextResponse.json({
-      message: "Xero revenue source debug complete",
+      message: "Detailed Xero revenue import complete",
       clientId,
+      clientName: client?.name || null,
       tokenWasRefreshed,
-      endpointStatus: {
-        invoices: {
-          ok: invoiceResponse.ok,
-          status: invoiceResponse.status,
-          error: invoiceText || null,
-        },
-        bankTransactions: {
-          ok: bankResponse.ok,
-          status: bankResponse.status,
-          error: bankText || null,
-        },
-        manualJournals: {
-          ok: journalResponse.ok,
-          status: journalResponse.status,
-          error: journalText || null,
-        },
+      sourceCounts: {
+        invoicesImported: invoiceCount,
+        invoiceLinesImported: invoiceLineCount,
+        bankTransactionsImported: bankTransactionCount,
+        bankLinesImported: bankLineCount,
+        bankReceiveTransactionsSkippedAsNonRevenue: skippedBankTransfers,
+        manualJournalsImported: manualJournalCount,
+        manualJournalLinesImported: manualJournalLineCount,
       },
-      counts: {
-        invoices: invoices.length,
-        bankTransactions: bankTransactions.length,
-        manualJournals: manualJournals.length,
-      },
-      totalsByAccountCode: {
-        invoices: invoiceAccountCodes,
-        bankTransactions: bankAccountCodes,
-        manualJournals: journalAccountCodes,
-      },
-      totalsByTaxType: {
-        invoices: invoiceTaxTypes,
-        bankTransactions: bankTaxTypes,
-        manualJournals: journalTaxTypes,
-      },
-      samples: {
-        invoices: invoices.slice(0, 5).map((invoice) => ({
-          invoiceId: invoice.InvoiceID,
-          invoiceNumber: invoice.InvoiceNumber,
-          type: invoice.Type,
-          status: invoice.Status,
-          date: invoice.DateString || invoice.Date,
-          total: invoice.Total,
-          totalTax: invoice.TotalTax,
-          lineItems: summariseLineItems(invoice.LineItems),
-        })),
-        bankTransactions: bankTransactions.slice(0, 10).map((transaction) => ({
-          bankTransactionId: transaction.BankTransactionID,
-          type: transaction.Type,
-          status: transaction.Status,
-          date: transaction.DateString || transaction.Date,
-          contactName: transaction.Contact?.Name || null,
-          total: transaction.Total,
-          totalTax: transaction.TotalTax,
-          lineItems: summariseLineItems(transaction.LineItems),
-        })),
-        manualJournals: manualJournals.slice(0, 10).map((journal) => ({
-          manualJournalId: journal.ManualJournalID,
-          narration: journal.Narration,
-          date: journal.Date,
-          status: journal.Status,
-          journalLines: summariseJournalLines(journal.JournalLines),
-        })),
-      },
+      rollingTurnover: Number(rollingTurnover.toFixed(2)),
+      thresholdPercent: Number(thresholdPercent.toFixed(2)),
+      riskStatus,
+      alertType,
+      emailResult,
+      months: turnoverRows,
     });
   } catch (error) {
     return NextResponse.json(
       {
-        error: "Unexpected debug import failure",
+        error: "Unexpected detailed import failure",
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
