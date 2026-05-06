@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     "profile",
     "email",
     "offline_access",
-    "accounting.invoices.read",
+    "accounting.reports.read",
     "accounting.settings.read",
   ].join(" ");
 
