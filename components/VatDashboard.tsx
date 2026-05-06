@@ -48,6 +48,15 @@ type AccountingConnection = {
   connected_at: string;
 };
 
+type VatAlert = {
+  id: string;
+  client_id: string;
+  threshold_percentage: number;
+  alert_type: string;
+  message: string;
+  created_at: string;
+};
+
 function formatMonth(date: Date) {
   return date.toLocaleString("en-GB", {
     month: "short",
@@ -99,6 +108,7 @@ export default function VatDashboard() {
   const [accountingConnections, setAccountingConnections] = useState<
     AccountingConnection[]
   >([]);
+  const [vatAlerts, setVatAlerts] = useState<VatAlert[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
 
   const [months, setMonths] = useState<MonthRow[]>(getLastCompleted12Months());
@@ -143,9 +153,15 @@ export default function VatDashboard() {
       .select("id,client_id,provider,provider_tenant_id,connected_at")
       .order("connected_at", { ascending: false });
 
+    const { data: alerts } = await supabase
+      .from("vat_alerts")
+      .select("id,client_id,threshold_percentage,alert_type,message,created_at")
+      .order("created_at", { ascending: false });
+
     setSavedClients((clients || []) as SavedClient[]);
     setSavedReviews((reviews || []) as SavedReview[]);
     setAccountingConnections((connections || []) as AccountingConnection[]);
+    setVatAlerts((alerts || []) as VatAlert[]);
     setLoadingSaved(false);
   }
 
@@ -302,6 +318,7 @@ export default function VatDashboard() {
     setSavedClients([]);
     setSavedReviews([]);
     setAccountingConnections([]);
+    setVatAlerts([]);
   }
 
   function updateValue(index: number, field: VatField, value: number) {
@@ -343,11 +360,20 @@ export default function VatDashboard() {
     return savedReviews.find((review) => review.client_id === clientId);
   }
 
+  function latestAlertForClient(clientId: string) {
+    return vatAlerts.find((alert) => alert.client_id === clientId);
+  }
+
   function reviewsForSelectedClient() {
     if (!selectedClientId) return [];
     return savedReviews.filter(
       (review) => review.client_id === selectedClientId
     );
+  }
+
+  function alertsForSelectedClient() {
+    if (!selectedClientId) return [];
+    return vatAlerts.filter((alert) => alert.client_id === selectedClientId);
   }
 
   function connectionForClient(
@@ -590,6 +616,8 @@ export default function VatDashboard() {
   }
 
   const selectedClientReviews = reviewsForSelectedClient();
+  const selectedClientAlerts = alertsForSelectedClient();
+
   const rollingPeriod =
     months.length > 0
       ? `${months[0].month} to ${months[months.length - 1].month}`
@@ -655,12 +683,62 @@ export default function VatDashboard() {
           </div>
         </div>
 
+        {vatAlerts.length > 0 && (
+          <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow">
+            <h2 className="text-xl font-bold text-orange-900">
+              VAT alerts
+            </h2>
+            <p className="mt-1 text-sm text-orange-800">
+              Latest threshold alerts created by the VAT monitoring engine.
+            </p>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-orange-200 text-left">
+                    <th className="p-2">Client</th>
+                    <th className="p-2">Alert</th>
+                    <th className="p-2">% threshold</th>
+                    <th className="p-2">Message</th>
+                    <th className="p-2">Date</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {vatAlerts.slice(0, 10).map((alert) => {
+                    const client = savedClients.find(
+                      (item) => item.id === alert.client_id
+                    );
+
+                    return (
+                      <tr key={alert.id} className="border-b border-orange-100">
+                        <td className="p-2 font-medium">
+                          {client?.name || "Unknown client"}
+                        </td>
+                        <td className="p-2 font-semibold">
+                          {alert.alert_type}
+                        </td>
+                        <td className="p-2">
+                          {Number(alert.threshold_percentage || 0).toFixed(1)}%
+                        </td>
+                        <td className="p-2">{alert.message}</td>
+                        <td className="p-2">
+                          {new Date(alert.created_at).toLocaleString("en-GB")}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
         <div className="mb-6 rounded-2xl bg-white p-6 shadow">
           <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h2 className="text-xl font-bold">Multi-client VAT dashboard</h2>
               <p className="text-sm text-slate-500">
-                See all clients, latest turnover, threshold usage and VAT risk.
+                See all clients, latest turnover, threshold usage, alerts and VAT risk.
               </p>
             </div>
 
@@ -694,6 +772,7 @@ export default function VatDashboard() {
                     <th className="p-2">Latest turnover</th>
                     <th className="p-2">% threshold</th>
                     <th className="p-2">Latest risk</th>
+                    <th className="p-2">Alert</th>
                     <th className="p-2">Xero</th>
                     <th className="p-2">Action</th>
                   </tr>
@@ -701,6 +780,7 @@ export default function VatDashboard() {
                 <tbody>
                   {savedClients.map((client) => {
                     const review = latestReviewForClient(client.id);
+                    const latestAlert = latestAlertForClient(client.id);
                     const turnover = Number(
                       review?.rolling_taxable_turnover || 0
                     );
@@ -724,6 +804,17 @@ export default function VatDashboard() {
                         <td className="p-2">{percent.toFixed(1)}%</td>
                         <td className={`p-2 font-semibold ${rowRiskColour}`}>
                           {review?.risk_status || "No review"}
+                        </td>
+                        <td className="p-2">
+                          {latestAlert ? (
+                            <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">
+                              {latestAlert.alert_type}
+                            </span>
+                          ) : (
+                            <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">
+                              Clear
+                            </span>
+                          )}
                         </td>
                         <td className="p-2">
                           {xeroConnection ? (
@@ -752,6 +843,44 @@ export default function VatDashboard() {
             </div>
           )}
         </div>
+
+        {selectedClientId && selectedClientAlerts.length > 0 && (
+          <div className="mb-6 rounded-2xl border border-orange-200 bg-white p-6 shadow">
+            <h2 className="text-xl font-bold">Selected client alerts</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              Alert history for {clientName}.
+            </p>
+
+            <div className="mt-4 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b text-left">
+                    <th className="p-2">Alert type</th>
+                    <th className="p-2">% threshold</th>
+                    <th className="p-2">Message</th>
+                    <th className="p-2">Created</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {selectedClientAlerts.map((alert) => (
+                    <tr key={alert.id} className="border-b">
+                      <td className="p-2 font-semibold">
+                        {alert.alert_type}
+                      </td>
+                      <td className="p-2">
+                        {Number(alert.threshold_percentage || 0).toFixed(1)}%
+                      </td>
+                      <td className="p-2">{alert.message}</td>
+                      <td className="p-2">
+                        {new Date(alert.created_at).toLocaleString("en-GB")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
 
         {selectedClientId && (
           <div className="mb-6 rounded-2xl bg-white p-6 shadow">
