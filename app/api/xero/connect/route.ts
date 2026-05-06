@@ -24,6 +24,8 @@ export async function GET(request: Request) {
     "email",
     "offline_access",
     "accounting.invoices.read",
+    "accounting.banktransactions.read",
+    "accounting.manualjournals.read",
     "accounting.settings.read",
   ].join(" ");
 
