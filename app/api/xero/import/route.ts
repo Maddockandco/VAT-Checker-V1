@@ -3,9 +3,9 @@ import { NextResponse } from "next/server";
 
 const VAT_THRESHOLD = 90000;
 const DETAIL_CALL_DELAY_MS = 350;
-const MAX_BANK_DETAIL_CALLS = 250;
-const MAX_JOURNAL_DETAIL_CALLS = 250;
-const MAX_INVOICE_DETAIL_CALLS = 150;
+const MAX_BANK_DETAIL_CALLS = 25;
+const MAX_JOURNAL_DETAIL_CALLS = 25;
+const MAX_INVOICE_DETAIL_CALLS = 25;
 
 type VatCategory =
   | "standard_rated"
