@@ -2,6 +2,10 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 const VAT_THRESHOLD = 90000;
+const DETAIL_CALL_DELAY_MS = 350;
+const MAX_BANK_DETAIL_CALLS = 250;
+const MAX_JOURNAL_DETAIL_CALLS = 250;
+const MAX_INVOICE_DETAIL_CALLS = 150;
 
 type VatCategory =
   | "standard_rated"
@@ -44,6 +48,8 @@ type XeroBankTransaction = {
   Status?: string;
   DateString?: string;
   Date?: string;
+  Total?: number;
+  TotalTax?: number;
   LineItems?: XeroLineItem[];
 };
 
@@ -62,13 +68,15 @@ type XeroManualJournal = {
   JournalLines?: XeroManualJournalLine[];
 };
 
+function delay(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function parseXeroDate(value: string | undefined): Date | null {
   if (!value) return null;
 
   const match = value.match(/\/Date\((\d+)/);
-  if (match?.[1]) {
-    return new Date(Number(match[1]));
-  }
+  if (match?.[1]) return new Date(Number(match[1]));
 
   const parsed = new Date(value);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
@@ -85,11 +93,25 @@ function monthKey(date: Date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function getLastCompleted12Months(): MonthBucket[] {
+function isoDate(date: Date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function xeroDateTime(date: Date) {
+  return `DateTime(${date.getFullYear()},${date.getMonth() + 1},${date.getDate()})`;
+}
+
+function getLastCompleted12Months(): {
+  buckets: MonthBucket[];
+  fromDate: Date;
+  toDate: Date;
+} {
   const today = new Date();
   const endMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+  const fromDate = new Date(endMonth.getFullYear(), endMonth.getMonth() - 11, 1);
+  const toDate = new Date(endMonth.getFullYear(), endMonth.getMonth() + 1, 0);
 
-  return Array.from({ length: 12 }, (_, index) => {
+  const buckets = Array.from({ length: 12 }, (_, index) => {
     const monthDate = new Date(
       endMonth.getFullYear(),
       endMonth.getMonth() - (11 - index),
@@ -106,26 +128,17 @@ function getLastCompleted12Months(): MonthBucket[] {
       out_of_scope: 0,
     };
   });
+
+  return { buckets, fromDate, toDate };
 }
 
 function classifyTaxType(taxType: string | undefined): VatCategory {
   const value = String(taxType || "").toUpperCase();
 
-  if (value.includes("ZERO") || value.includes("ZERORATED")) {
-    return "zero_rated";
-  }
-
-  if (value.includes("EXEMPT")) {
-    return "exempt";
-  }
-
-  if (value.includes("REDUCED") || value.includes("OUTPUT5")) {
-    return "reduced_rated";
-  }
-
-  if (value.includes("OUTOFSCOPE")) {
-    return "out_of_scope";
-  }
+  if (value.includes("ZERO") || value.includes("ZERORATED")) return "zero_rated";
+  if (value.includes("EXEMPT")) return "exempt";
+  if (value.includes("REDUCED") || value.includes("OUTPUT5")) return "reduced_rated";
+  if (value.includes("OUTOFSCOPE")) return "out_of_scope";
 
   return "standard_rated";
 }
@@ -143,11 +156,7 @@ function isRevenueAccount(accountCode: string | undefined) {
   return code >= 200 && code < 999;
 }
 
-function addToBucket(
-  bucket: MonthBucket,
-  amount: number,
-  taxType: string | undefined
-) {
+function addToBucket(bucket: MonthBucket, amount: number, taxType: string | undefined) {
   const category = classifyTaxType(taxType);
   bucket[category] += Math.abs(amount);
 }
@@ -174,9 +183,7 @@ async function refreshXeroToken(refreshToken: string) {
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
+  if (!response.ok) throw new Error(await response.text());
 
   return response.json();
 }
@@ -204,10 +211,7 @@ async function sendVatAlertEmail(params: {
     process.env.VAT_ALERT_EMAIL_FROM || "VAT Checker <onboarding@resend.dev>";
 
   if (!apiKey || !to) {
-    return {
-      sent: false,
-      reason: "Missing Resend configuration",
-    };
+    return { sent: false, reason: "Missing Resend configuration" };
   }
 
   const response = await fetch("https://api.resend.com/emails", {
@@ -233,17 +237,9 @@ async function sendVatAlertEmail(params: {
     }),
   });
 
-  if (!response.ok) {
-    return {
-      sent: false,
-      reason: await response.text(),
-    };
-  }
+  if (!response.ok) return { sent: false, reason: await response.text() };
 
-  return {
-    sent: true,
-    reason: "Email sent",
-  };
+  return { sent: true, reason: "Email sent" };
 }
 
 export async function GET(request: Request) {
@@ -288,6 +284,7 @@ export async function GET(request: Request) {
     let accessToken = connection.access_token;
     let refreshToken = connection.refresh_token;
     let tokenWasRefreshed = false;
+    let rateLimitHit = false;
 
     async function fetchWithRefresh(apiUrl: string) {
       let response = await xeroFetch(
@@ -321,15 +318,34 @@ export async function GET(request: Request) {
         );
       }
 
+      if (response.status === 429) {
+        rateLimitHit = true;
+      }
+
       return response;
     }
 
-    const buckets = getLastCompleted12Months();
+    async function fetchDetailWithRetry(apiUrl: string) {
+      let response = await fetchWithRefresh(apiUrl);
+
+      if (response.status === 429) {
+        const retryAfter = Number(response.headers.get("retry-after") || 5);
+        await delay(Math.min(retryAfter * 1000, 10000));
+        response = await fetchWithRefresh(apiUrl);
+      }
+
+      await delay(DETAIL_CALL_DELAY_MS);
+
+      return response;
+    }
+
+    const { buckets, fromDate, toDate } = getLastCompleted12Months();
     const bucketMap = new Map<string, MonthBucket>();
 
-    buckets.forEach((bucket) => {
-      bucketMap.set(bucket.month_key, bucket);
-    });
+    buckets.forEach((bucket) => bucketMap.set(bucket.month_key, bucket));
+
+    const fromFilter = xeroDateTime(fromDate);
+    const toFilter = xeroDateTime(toDate);
 
     let invoiceCount = 0;
     let invoiceLineCount = 0;
@@ -338,10 +354,17 @@ export async function GET(request: Request) {
     let manualJournalCount = 0;
     let manualJournalLineCount = 0;
     let skippedBankTransfers = 0;
+    let cappedBankDetails = false;
+    let cappedJournalDetails = false;
+    let cappedInvoiceDetails = false;
 
-    const invoiceListResponse = await fetchWithRefresh(
-      'https://api.xero.com/api.xro/2.0/Invoices?where=Type=="ACCREC"'
-    );
+    const invoiceListUrl =
+      "https://api.xero.com/api.xro/2.0/Invoices" +
+      `?where=${encodeURIComponent(
+        `Type=="ACCREC"&&Date>=${fromFilter}&&Date<=${toFilter}`
+      )}`;
+
+    const invoiceListResponse = await fetchWithRefresh(invoiceListUrl);
 
     if (!invoiceListResponse.ok) {
       return NextResponse.json(
@@ -350,17 +373,17 @@ export async function GET(request: Request) {
           status: invoiceListResponse.status,
           details: await invoiceListResponse.text(),
         },
-        { status: 400 }
+        { status: invoiceListResponse.status === 429 ? 429 : 400 }
       );
     }
 
     const invoiceListData = await invoiceListResponse.json();
     const invoiceSummaries: XeroInvoice[] = invoiceListData.Invoices || [];
 
-    for (const invoiceSummary of invoiceSummaries) {
+    for (const invoiceSummary of invoiceSummaries.slice(0, MAX_INVOICE_DETAIL_CALLS)) {
       if (!invoiceSummary.InvoiceID) continue;
 
-      const detailResponse = await fetchWithRefresh(
+      const detailResponse = await fetchDetailWithRetry(
         `https://api.xero.com/api.xro/2.0/Invoices/${invoiceSummary.InvoiceID}`
       );
 
@@ -390,9 +413,15 @@ export async function GET(request: Request) {
       invoiceCount += 1;
     }
 
-    const bankListResponse = await fetchWithRefresh(
-      "https://api.xero.com/api.xro/2.0/BankTransactions"
-    );
+    cappedInvoiceDetails = invoiceSummaries.length > MAX_INVOICE_DETAIL_CALLS;
+
+    const bankListUrl =
+      "https://api.xero.com/api.xro/2.0/BankTransactions" +
+      `?where=${encodeURIComponent(
+        `Type=="RECEIVE"&&Date>=${fromFilter}&&Date<=${toFilter}`
+      )}`;
+
+    const bankListResponse = await fetchWithRefresh(bankListUrl);
 
     if (!bankListResponse.ok) {
       return NextResponse.json(
@@ -401,7 +430,7 @@ export async function GET(request: Request) {
           status: bankListResponse.status,
           details: await bankListResponse.text(),
         },
-        { status: 400 }
+        { status: bankListResponse.status === 429 ? 429 : 400 }
       );
     }
 
@@ -409,26 +438,10 @@ export async function GET(request: Request) {
     const bankSummaries: XeroBankTransaction[] =
       bankListData.BankTransactions || [];
 
-    const relevantBankSummaries = bankSummaries.filter((transaction) => {
-      if (!transaction.BankTransactionID) return false;
-      if (transaction.Type !== "RECEIVE") return false;
-      if (transaction.Status === "VOIDED" || transaction.Status === "DELETED") {
-        return false;
-      }
-
-      const transactionDate = parseXeroDate(
-        transaction.DateString || transaction.Date
-      );
-
-      if (!transactionDate) return false;
-
-      return bucketMap.has(monthKey(transactionDate));
-    });
-
-    for (const bankSummary of relevantBankSummaries) {
+    for (const bankSummary of bankSummaries.slice(0, MAX_BANK_DETAIL_CALLS)) {
       if (!bankSummary.BankTransactionID) continue;
 
-      const detailResponse = await fetchWithRefresh(
+      const detailResponse = await fetchDetailWithRetry(
         `https://api.xero.com/api.xro/2.0/BankTransactions/${bankSummary.BankTransactionID}`
       );
 
@@ -440,6 +453,9 @@ export async function GET(request: Request) {
 
       if (!transaction) continue;
       if (transaction.Type !== "RECEIVE") continue;
+      if (transaction.Status === "VOIDED" || transaction.Status === "DELETED") {
+        continue;
+      }
 
       const transactionDate = parseXeroDate(
         transaction.DateString || transaction.Date
@@ -470,9 +486,13 @@ export async function GET(request: Request) {
       }
     }
 
-    const manualJournalListResponse = await fetchWithRefresh(
-      "https://api.xero.com/api.xro/2.0/ManualJournals"
-    );
+    cappedBankDetails = bankSummaries.length > MAX_BANK_DETAIL_CALLS;
+
+    const manualJournalListUrl =
+      "https://api.xero.com/api.xro/2.0/ManualJournals" +
+      `?where=${encodeURIComponent(`Date>=${fromFilter}&&Date<=${toFilter}`)}`;
+
+    const manualJournalListResponse = await fetchWithRefresh(manualJournalListUrl);
 
     if (!manualJournalListResponse.ok) {
       return NextResponse.json(
@@ -481,7 +501,7 @@ export async function GET(request: Request) {
           status: manualJournalListResponse.status,
           details: await manualJournalListResponse.text(),
         },
-        { status: 400 }
+        { status: manualJournalListResponse.status === 429 ? 429 : 400 }
       );
     }
 
@@ -489,20 +509,13 @@ export async function GET(request: Request) {
     const manualJournalSummaries: XeroManualJournal[] =
       manualJournalListData.ManualJournals || [];
 
-    const relevantManualJournals = manualJournalSummaries.filter((journal) => {
-      if (!journal.ManualJournalID) return false;
-      if (journal.Status !== "POSTED") return false;
-
-      const journalDate = parseXeroDate(journal.Date);
-      if (!journalDate) return false;
-
-      return bucketMap.has(monthKey(journalDate));
-    });
-
-    for (const journalSummary of relevantManualJournals) {
+    for (const journalSummary of manualJournalSummaries.slice(
+      0,
+      MAX_JOURNAL_DETAIL_CALLS
+    )) {
       if (!journalSummary.ManualJournalID) continue;
 
-      const detailResponse = await fetchWithRefresh(
+      const detailResponse = await fetchDetailWithRetry(
         `https://api.xero.com/api.xro/2.0/ManualJournals/${journalSummary.ManualJournalID}`
       );
 
@@ -538,6 +551,8 @@ export async function GET(request: Request) {
         manualJournalCount += 1;
       }
     }
+
+    cappedJournalDetails = manualJournalSummaries.length > MAX_JOURNAL_DETAIL_CALLS;
 
     const rollingTurnover = buckets.reduce(
       (sum, bucket) =>
@@ -595,7 +610,7 @@ export async function GET(request: Request) {
         expected_next_30_days: 0,
         risk_status: riskStatus,
         advice_note:
-          "Auto-imported from detailed Xero invoices, bank transactions and manual journals.",
+          "Auto-imported from rate-limit-safe detailed Xero revenue sources.",
       });
 
     if (reviewInsertError) {
@@ -642,18 +657,34 @@ export async function GET(request: Request) {
     }
 
     return NextResponse.json({
-      message: "Detailed Xero revenue import complete",
+      message: "Rate-limit-safe Xero revenue import complete",
       clientId,
       clientName: client?.name || null,
       tokenWasRefreshed,
+      rateLimitHit,
+      importWindow: {
+        fromDate: isoDate(fromDate),
+        toDate: isoDate(toDate),
+      },
       sourceCounts: {
+        invoiceSummariesInPeriod: invoiceSummaries.length,
         invoicesImported: invoiceCount,
         invoiceLinesImported: invoiceLineCount,
+        bankSummariesInPeriod: bankSummaries.length,
         bankTransactionsImported: bankTransactionCount,
         bankLinesImported: bankLineCount,
         bankReceiveTransactionsSkippedAsNonRevenue: skippedBankTransfers,
+        manualJournalSummariesInPeriod: manualJournalSummaries.length,
         manualJournalsImported: manualJournalCount,
         manualJournalLinesImported: manualJournalLineCount,
+      },
+      detailCaps: {
+        maxInvoiceDetailCalls: MAX_INVOICE_DETAIL_CALLS,
+        maxBankDetailCalls: MAX_BANK_DETAIL_CALLS,
+        maxJournalDetailCalls: MAX_JOURNAL_DETAIL_CALLS,
+        cappedInvoiceDetails,
+        cappedBankDetails,
+        cappedJournalDetails,
       },
       rollingTurnover: Number(rollingTurnover.toFixed(2)),
       thresholdPercent: Number(thresholdPercent.toFixed(2)),
@@ -665,7 +696,7 @@ export async function GET(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        error: "Unexpected detailed import failure",
+        error: "Unexpected rate-limit-safe import failure",
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
