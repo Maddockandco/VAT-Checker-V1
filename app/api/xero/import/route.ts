@@ -25,36 +25,19 @@ type MonthBucket = {
   out_of_scope: number;
 };
 
-type SkipReasons = Record<string, number>;
-type AccountCodesSeen = Record<string, number>;
-
-type SkippedRecord = {
-  id: string | null;
-  reason: string;
-  source: SourceType;
-};
-
-type ImportedRecord = {
-  id: string | null;
-  source: SourceType;
-  linesImported: number;
-};
-
-type DebugLine = {
-  recordId: string | null;
-  source: SourceType;
-  accountCode: string | null;
-  lineAmount: number;
-  taxType: string | null;
-  description: string | null;
-  revenueMatched: boolean;
+type XeroAccount = {
+  Code?: string;
+  Name?: string;
+  Type?: string;
+  Status?: string;
+  Class?: string;
+  TaxType?: string;
 };
 
 type XeroLineItem = {
   Description?: string;
   LineAmount?: number;
   TaxType?: string;
-  TaxAmount?: number;
   AccountCode?: string;
 };
 
@@ -126,7 +109,6 @@ function getLastCompleted12Months(): {
   toDate: Date;
 } {
   const today = new Date();
-
   const endMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
   const fromDate = new Date(endMonth.getFullYear(), endMonth.getMonth() - 11, 1);
   const toDate = new Date(endMonth.getFullYear(), endMonth.getMonth() + 1, 0);
@@ -169,16 +151,24 @@ function safeNumber(value: unknown) {
 }
 
 function normaliseAccountCode(accountCode: string | undefined) {
-  const value = String(accountCode || "").trim();
-  return value || "NO_ACCOUNT_CODE";
+  return String(accountCode || "").trim();
 }
 
-function isRevenueAccount(accountCode: string | undefined) {
-  if (!accountCode) return false;
+function isXeroRevenueAccount(account: XeroAccount | undefined) {
+  if (!account) return false;
 
-  const code = Number(String(accountCode).replace(/\D/g, ""));
+  const status = String(account.Status || "").toUpperCase();
+  const type = String(account.Type || "").toUpperCase();
+  const accountClass = String(account.Class || "").toUpperCase();
 
-  return code >= 200 && code < 999;
+  if (status === "ARCHIVED") return false;
+
+  return (
+    type === "REVENUE" ||
+    type === "SALES" ||
+    type === "OTHERINCOME" ||
+    accountClass === "REVENUE"
+  );
 }
 
 function addToBucket(bucket: MonthBucket, amount: number, taxType: string | undefined) {
@@ -200,9 +190,11 @@ function buildNextUrl(
   clientId: string,
   source: SourceType,
   nextOffset: number,
-  limit: number
+  limit: number,
+  debug: boolean
 ) {
-  return `${APP_URL}/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}&debug=true`;
+  const debugPart = debug ? "&debug=true" : "";
+  return `${APP_URL}/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}${debugPart}`;
 }
 
 async function refreshXeroToken(refreshToken: string) {
@@ -346,6 +338,61 @@ export async function GET(request: Request) {
       return response;
     }
 
+    const accountsResponse = await fetchWithRefresh(
+      "https://api.xero.com/api.xro/2.0/Accounts"
+    );
+
+    if (!accountsResponse.ok) {
+      return NextResponse.json(
+        {
+          error: "Xero chart of accounts import failed",
+          status: accountsResponse.status,
+          details: await accountsResponse.text(),
+        },
+        { status: accountsResponse.status === 429 ? 429 : 400 }
+      );
+    }
+
+    const accountsData = await accountsResponse.json();
+    const accounts: XeroAccount[] = accountsData.Accounts || [];
+
+    const accountMap = new Map<string, XeroAccount>();
+    const revenueAccountCodes: string[] = [];
+    const revenueAccounts = accounts
+      .filter((account) => isXeroRevenueAccount(account))
+      .map((account) => {
+        const code = normaliseAccountCode(account.Code);
+
+        if (code) {
+          accountMap.set(code, account);
+          revenueAccountCodes.push(code);
+        }
+
+        return {
+          code,
+          name: account.Name || null,
+          type: account.Type || null,
+          class: account.Class || null,
+          taxType: account.TaxType || null,
+          status: account.Status || null,
+        };
+      });
+
+    for (const account of accounts) {
+      const code = normaliseAccountCode(account.Code);
+      if (code && !accountMap.has(code)) {
+        accountMap.set(code, account);
+      }
+    }
+
+    function isRevenueAccount(accountCode: string | undefined) {
+      const code = normaliseAccountCode(accountCode);
+      if (!code) return false;
+
+      const account = accountMap.get(code);
+      return isXeroRevenueAccount(account);
+    }
+
     const { buckets, fromDate, toDate } = getLastCompleted12Months();
     const bucketMap = new Map<string, MonthBucket>();
 
@@ -411,68 +458,50 @@ export async function GET(request: Request) {
     let linesImported = 0;
     let recordsSkipped = 0;
 
-    const skipReasons: SkipReasons = {};
-    const accountCodesSeen: AccountCodesSeen = {};
-    const manualJournalAccountCodesSeen: AccountCodesSeen = {};
-    const bankTransactionAccountCodesSeen: AccountCodesSeen = {};
-    const invoiceAccountCodesSeen: AccountCodesSeen = {};
-
-    const skippedRecords: SkippedRecord[] = [];
-    const importedRecords: ImportedRecord[] = [];
-    const debugLines: DebugLine[] = [];
+    const skipReasons: Record<string, number> = {};
+    const accountCodesSeen: Record<string, number> = {};
+    const revenueAccountCodesSeen: Record<string, number> = {};
+    const nonRevenueAccountCodesSeen: Record<string, number> = {};
+    const debugLines: any[] = [];
+    const skippedRecords: any[] = [];
+    const importedRecords: any[] = [];
 
     function skip(recordId: string | null, reason: string) {
       recordsSkipped += 1;
       addCount(skipReasons, reason);
 
       if (debug && skippedRecords.length < 50) {
-        skippedRecords.push({
-          id: recordId,
-          reason,
+        skippedRecords.push({ id: recordId, source, reason });
+      }
+    }
+
+    function inspectLine(recordId: string | null, line: XeroLineItem | XeroManualJournalLine) {
+      const code = normaliseAccountCode(line.AccountCode) || "NO_ACCOUNT_CODE";
+      const revenueMatched = isRevenueAccount(line.AccountCode);
+      const account = accountMap.get(code);
+
+      addCount(accountCodesSeen, code);
+
+      if (revenueMatched) {
+        addCount(revenueAccountCodesSeen, code);
+      } else {
+        addCount(nonRevenueAccountCodesSeen, code);
+      }
+
+      if (debug && debugLines.length < 100) {
+        debugLines.push({
+          recordId,
           source,
+          accountCode: code,
+          accountName: account?.Name || null,
+          accountType: account?.Type || null,
+          accountClass: account?.Class || null,
+          lineAmount: safeNumber(line.LineAmount),
+          taxType: line.TaxType || null,
+          description: line.Description || null,
+          revenueMatched,
         });
       }
-    }
-
-    function recordAccountCode(sourceType: SourceType, accountCode: string | undefined) {
-      const normalisedCode = normaliseAccountCode(accountCode);
-
-      addCount(accountCodesSeen, normalisedCode);
-
-      if (sourceType === "manual_journals") {
-        addCount(manualJournalAccountCodesSeen, normalisedCode);
-      }
-
-      if (sourceType === "bank_transactions") {
-        addCount(bankTransactionAccountCodesSeen, normalisedCode);
-      }
-
-      if (sourceType === "invoices") {
-        addCount(invoiceAccountCodesSeen, normalisedCode);
-      }
-    }
-
-    function addDebugLine(
-      recordId: string | null,
-      sourceType: SourceType,
-      line: {
-        AccountCode?: string;
-        LineAmount?: number;
-        TaxType?: string;
-        Description?: string;
-      }
-    ) {
-      if (!debug || debugLines.length >= 100) return;
-
-      debugLines.push({
-        recordId,
-        source: sourceType,
-        accountCode: normaliseAccountCode(line.AccountCode),
-        lineAmount: safeNumber(line.LineAmount),
-        taxType: line.TaxType || null,
-        description: line.Description || null,
-        revenueMatched: isRevenueAccount(line.AccountCode),
-      });
     }
 
     for (const summary of batch) {
@@ -512,14 +541,12 @@ export async function GET(request: Request) {
         }
 
         const recordDate = parseXeroDate(invoice.DateString || invoice.Date);
-
         if (!recordDate) {
           skip(recordId, "invoice_missing_or_invalid_date");
           continue;
         }
 
         const bucket = bucketMap.get(monthKey(recordDate));
-
         if (!bucket) {
           skip(recordId, "invoice_outside_import_window");
           continue;
@@ -528,11 +555,9 @@ export async function GET(request: Request) {
         let importedLinesForRecord = 0;
 
         for (const line of invoice.LineItems || []) {
-          recordAccountCode("invoices", line.AccountCode);
-          addDebugLine(recordId, "invoices", line);
+          inspectLine(recordId, line);
 
           const amount = safeNumber(line.LineAmount);
-
           if (amount === 0) continue;
 
           addToBucket(bucket, amount, line.TaxType);
@@ -542,13 +567,8 @@ export async function GET(request: Request) {
 
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
-
           if (debug && importedRecords.length < 50) {
-            importedRecords.push({
-              id: recordId,
-              source,
-              linesImported: importedLinesForRecord,
-            });
+            importedRecords.push({ id: recordId, source, linesImported: importedLinesForRecord });
           }
         } else {
           skip(recordId, "invoice_no_non_zero_lines");
@@ -569,14 +589,12 @@ export async function GET(request: Request) {
         }
 
         const recordDate = parseXeroDate(transaction.DateString || transaction.Date);
-
         if (!recordDate) {
           skip(recordId, "bank_transaction_missing_or_invalid_date");
           continue;
         }
 
         const bucket = bucketMap.get(monthKey(recordDate));
-
         if (!bucket) {
           skip(recordId, "bank_transaction_outside_import_window");
           continue;
@@ -587,15 +605,13 @@ export async function GET(request: Request) {
         let zeroAmountLinesFound = 0;
 
         for (const line of transaction.LineItems || []) {
-          recordAccountCode("bank_transactions", line.AccountCode);
-          addDebugLine(recordId, "bank_transactions", line);
+          inspectLine(recordId, line);
 
           if (!isRevenueAccount(line.AccountCode)) continue;
 
           revenueAccountLinesFound += 1;
 
           const amount = safeNumber(line.LineAmount);
-
           if (amount === 0) {
             zeroAmountLinesFound += 1;
             continue;
@@ -608,13 +624,8 @@ export async function GET(request: Request) {
 
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
-
           if (debug && importedRecords.length < 50) {
-            importedRecords.push({
-              id: recordId,
-              source,
-              linesImported: importedLinesForRecord,
-            });
+            importedRecords.push({ id: recordId, source, linesImported: importedLinesForRecord });
           }
         } else if (revenueAccountLinesFound === 0) {
           skip(recordId, "bank_transaction_no_revenue_account_lines");
@@ -634,14 +645,12 @@ export async function GET(request: Request) {
         }
 
         const recordDate = parseXeroDate(journal.Date);
-
         if (!recordDate) {
           skip(recordId, "manual_journal_missing_or_invalid_date");
           continue;
         }
 
         const bucket = bucketMap.get(monthKey(recordDate));
-
         if (!bucket) {
           skip(recordId, "manual_journal_outside_import_window");
           continue;
@@ -652,15 +661,13 @@ export async function GET(request: Request) {
         let zeroAmountLinesFound = 0;
 
         for (const line of journal.JournalLines || []) {
-          recordAccountCode("manual_journals", line.AccountCode);
-          addDebugLine(recordId, "manual_journals", line);
+          inspectLine(recordId, line);
 
           if (!isRevenueAccount(line.AccountCode)) continue;
 
           revenueAccountLinesFound += 1;
 
           const amount = safeNumber(line.LineAmount);
-
           if (amount === 0) {
             zeroAmountLinesFound += 1;
             continue;
@@ -673,13 +680,8 @@ export async function GET(request: Request) {
 
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
-
           if (debug && importedRecords.length < 50) {
-            importedRecords.push({
-              id: recordId,
-              source,
-              linesImported: importedLinesForRecord,
-            });
+            importedRecords.push({ id: recordId, source, linesImported: importedLinesForRecord });
           }
         } else if (revenueAccountLinesFound === 0) {
           skip(recordId, "manual_journal_no_revenue_account_lines");
@@ -816,10 +818,11 @@ export async function GET(request: Request) {
       linesImported,
       recordsSkipped,
       skipReasons,
+      revenueAccountCodes,
+      revenueAccounts,
       accountCodesSeen,
-      manualJournalAccountCodesSeen,
-      bankTransactionAccountCodesSeen,
-      invoiceAccountCodesSeen,
+      revenueAccountCodesSeen,
+      nonRevenueAccountCodesSeen,
       debugEnabled: debug,
       importedRecords: debug ? importedRecords : undefined,
       skippedRecords: debug ? skippedRecords : undefined,
@@ -832,7 +835,7 @@ export async function GET(request: Request) {
         fromDate: isoDate(fromDate),
         toDate: isoDate(toDate),
       },
-      nextUrl: done ? null : buildNextUrl(clientId, source, nextOffset, limit),
+      nextUrl: done ? null : buildNextUrl(clientId, source, nextOffset, limit, debug),
     });
   } catch (error) {
     return NextResponse.json(
