@@ -6,6 +6,10 @@ const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 50;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
+const XERO_DELAY_BETWEEN_CALLS_MS = 1200;
+const XERO_RATE_LIMIT_WAIT_MS = 15000;
+const XERO_MAX_RETRIES = 5;
+
 type SourceType = "invoices" | "bank_transactions" | "manual_journals";
 
 type VatCategory =
@@ -73,6 +77,10 @@ type XeroManualJournal = {
   Status?: string;
   JournalLines?: XeroManualJournalLine[];
 };
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function parseXeroDate(value: string | undefined): Date | null {
   if (!value) return null;
@@ -226,7 +234,7 @@ async function refreshXeroToken(refreshToken: string) {
   return response.json();
 }
 
-async function xeroFetch(url: string, accessToken: string, tenantId: string) {
+async function xeroFetchOnce(url: string, accessToken: string, tenantId: string) {
   return fetch(url, {
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -302,43 +310,82 @@ export async function GET(request: Request) {
     let accessToken = connection.access_token;
     let refreshToken = connection.refresh_token;
     let tokenWasRefreshed = false;
+    let rateLimitHit = false;
+    let rateLimitRetryCount = 0;
 
-    async function fetchWithRefresh(apiUrl: string) {
-      let response = await xeroFetch(
-        apiUrl,
-        accessToken,
-        connection.provider_tenant_id
-      );
+    async function fetchWithRefreshAndRateLimit(apiUrl: string) {
+      let attempt = 0;
 
-      if (response.status === 401) {
-        const refreshed = await refreshXeroToken(refreshToken);
+      while (attempt <= XERO_MAX_RETRIES) {
+        await sleep(XERO_DELAY_BETWEEN_CALLS_MS);
 
-        accessToken = refreshed.access_token;
-        refreshToken = refreshed.refresh_token;
-        tokenWasRefreshed = true;
-
-        await supabase
-          .from("accounting_connections")
-          .update({
-            access_token: refreshed.access_token,
-            refresh_token: refreshed.refresh_token,
-            token_expires_at: new Date(
-              Date.now() + Number(refreshed.expires_in || 0) * 1000
-            ).toISOString(),
-          })
-          .eq("id", connection.id);
-
-        response = await xeroFetch(
+        let response = await xeroFetchOnce(
           apiUrl,
           accessToken,
           connection.provider_tenant_id
         );
+
+        if (response.status === 401) {
+          const refreshed = await refreshXeroToken(refreshToken);
+
+          accessToken = refreshed.access_token;
+          refreshToken = refreshed.refresh_token;
+          tokenWasRefreshed = true;
+
+          await supabase
+            .from("accounting_connections")
+            .update({
+              access_token: refreshed.access_token,
+              refresh_token: refreshed.refresh_token,
+              token_expires_at: new Date(
+                Date.now() + Number(refreshed.expires_in || 0) * 1000
+              ).toISOString(),
+            })
+            .eq("id", connection.id);
+
+          await sleep(XERO_DELAY_BETWEEN_CALLS_MS);
+
+          response = await xeroFetchOnce(
+            apiUrl,
+            accessToken,
+            connection.provider_tenant_id
+          );
+        }
+
+        if (response.status !== 429) {
+          return response;
+        }
+
+        rateLimitHit = true;
+        rateLimitRetryCount += 1;
+
+        const retryAfterHeader = response.headers.get("Retry-After");
+        const retryAfterSeconds = Number(retryAfterHeader || 0);
+        const waitMs =
+          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+            ? retryAfterSeconds * 1000
+            : XERO_RATE_LIMIT_WAIT_MS;
+
+        await sleep(waitMs);
+        attempt += 1;
       }
 
-      return response;
+      return NextResponse.json(
+        {
+          error: "Xero rate limit reached",
+          status: 429,
+          details:
+            "The importer retried several times but Xero is still rate limiting this organisation. Wait a few minutes and continue from the same offset.",
+          source,
+          offset,
+          limit,
+          clientId,
+        },
+        { status: 429 }
+      ) as unknown as Response;
     }
 
-    const accountsResponse = await fetchWithRefresh(
+    const accountsResponse = await fetchWithRefreshAndRateLimit(
       "https://api.xero.com/api.xro/2.0/Accounts"
     );
 
@@ -348,6 +395,8 @@ export async function GET(request: Request) {
           error: "Xero chart of accounts import failed",
           status: accountsResponse.status,
           details: await accountsResponse.text(),
+          rateLimitHit,
+          rateLimitRetryCount,
         },
         { status: accountsResponse.status === 429 ? 429 : 400 }
       );
@@ -358,13 +407,13 @@ export async function GET(request: Request) {
 
     const accountMap = new Map<string, XeroAccount>();
     const revenueAccountCodes: string[] = [];
+
     const revenueAccounts = accounts
       .filter((account) => isXeroRevenueAccount(account))
       .map((account) => {
         const code = normaliseAccountCode(account.Code);
 
         if (code) {
-          accountMap.set(code, account);
           revenueAccountCodes.push(code);
         }
 
@@ -380,7 +429,7 @@ export async function GET(request: Request) {
 
     for (const account of accounts) {
       const code = normaliseAccountCode(account.Code);
-      if (code && !accountMap.has(code)) {
+      if (code) {
         accountMap.set(code, account);
       }
     }
@@ -437,7 +486,7 @@ export async function GET(request: Request) {
       detailUrlBase = "https://api.xero.com/api.xro/2.0/ManualJournals";
     }
 
-    const listResponse = await fetchWithRefresh(listUrl);
+    const listResponse = await fetchWithRefreshAndRateLimit(listUrl);
 
     if (!listResponse.ok) {
       return NextResponse.json(
@@ -445,6 +494,8 @@ export async function GET(request: Request) {
           error: `${source} list import failed`,
           status: listResponse.status,
           details: await listResponse.text(),
+          rateLimitHit,
+          rateLimitRetryCount,
         },
         { status: listResponse.status === 429 ? 429 : 400 }
       );
@@ -475,7 +526,10 @@ export async function GET(request: Request) {
       }
     }
 
-    function inspectLine(recordId: string | null, line: XeroLineItem | XeroManualJournalLine) {
+    function inspectLine(
+      recordId: string | null,
+      line: XeroLineItem | XeroManualJournalLine
+    ) {
       const code = normaliseAccountCode(line.AccountCode) || "NO_ACCOUNT_CODE";
       const revenueMatched = isRevenueAccount(line.AccountCode);
       const account = accountMap.get(code);
@@ -512,7 +566,9 @@ export async function GET(request: Request) {
         continue;
       }
 
-      const detailResponse = await fetchWithRefresh(`${detailUrlBase}/${recordId}`);
+      const detailResponse = await fetchWithRefreshAndRateLimit(
+        `${detailUrlBase}/${recordId}`
+      );
 
       if (!detailResponse.ok) {
         skip(recordId, `detail_fetch_failed_status_${detailResponse.status}`);
@@ -567,8 +623,13 @@ export async function GET(request: Request) {
 
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
+
           if (debug && importedRecords.length < 50) {
-            importedRecords.push({ id: recordId, source, linesImported: importedLinesForRecord });
+            importedRecords.push({
+              id: recordId,
+              source,
+              linesImported: importedLinesForRecord,
+            });
           }
         } else {
           skip(recordId, "invoice_no_non_zero_lines");
@@ -624,8 +685,13 @@ export async function GET(request: Request) {
 
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
+
           if (debug && importedRecords.length < 50) {
-            importedRecords.push({ id: recordId, source, linesImported: importedLinesForRecord });
+            importedRecords.push({
+              id: recordId,
+              source,
+              linesImported: importedLinesForRecord,
+            });
           }
         } else if (revenueAccountLinesFound === 0) {
           skip(recordId, "bank_transaction_no_revenue_account_lines");
@@ -680,8 +746,13 @@ export async function GET(request: Request) {
 
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
+
           if (debug && importedRecords.length < 50) {
-            importedRecords.push({ id: recordId, source, linesImported: importedLinesForRecord });
+            importedRecords.push({
+              id: recordId,
+              source,
+              linesImported: importedLinesForRecord,
+            });
           }
         } else if (revenueAccountLinesFound === 0) {
           skip(recordId, "manual_journal_no_revenue_account_lines");
@@ -773,7 +844,7 @@ export async function GET(request: Request) {
       rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
       expected_next_30_days: 0,
       risk_status: riskStatus,
-      advice_note: `Batch import from Xero source: ${source}`,
+      advice_note: `Rate-limit-safe batch import from Xero source: ${source}`,
     });
 
     let alertType: string | null = null;
@@ -803,7 +874,7 @@ export async function GET(request: Request) {
     const done = nextOffset >= summaries.length;
 
     return NextResponse.json({
-      message: "Xero batch import complete",
+      message: "Rate-limit-safe Xero batch import complete",
       clientId,
       clientName: client?.name || null,
       source,
@@ -813,6 +884,13 @@ export async function GET(request: Request) {
       done,
       totalAvailable: summaries.length,
       tokenWasRefreshed,
+      rateLimitHit,
+      rateLimitRetryCount,
+      rateLimitSettings: {
+        delayBetweenCallsMs: XERO_DELAY_BETWEEN_CALLS_MS,
+        waitAfter429Ms: XERO_RATE_LIMIT_WAIT_MS,
+        maxRetries: XERO_MAX_RETRIES,
+      },
       recordsInThisBatch: batch.length,
       recordsImported,
       linesImported,
@@ -840,7 +918,7 @@ export async function GET(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        error: "Unexpected batch import failure",
+        error: "Unexpected rate-limit-safe batch import failure",
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
