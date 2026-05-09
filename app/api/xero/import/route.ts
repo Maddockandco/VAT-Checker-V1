@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 const VAT_THRESHOLD = 90000;
 const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 50;
+const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
 type SourceType = "invoices" | "bank_transactions" | "manual_journals";
 
@@ -22,6 +23,20 @@ type MonthBucket = {
   zero_rated: number;
   exempt: number;
   out_of_scope: number;
+};
+
+type SkipReasons = Record<string, number>;
+
+type SkippedRecord = {
+  id: string | null;
+  reason: string;
+  source: SourceType;
+};
+
+type ImportedRecord = {
+  id: string | null;
+  source: SourceType;
+  linesImported: number;
 };
 
 type XeroLineItem = {
@@ -100,6 +115,7 @@ function getLastCompleted12Months(): {
   toDate: Date;
 } {
   const today = new Date();
+
   const endMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
   const fromDate = new Date(endMonth.getFullYear(), endMonth.getMonth() - 11, 1);
   const toDate = new Date(endMonth.getFullYear(), endMonth.getMonth() + 1, 0);
@@ -154,6 +170,25 @@ function addToBucket(bucket: MonthBucket, amount: number, taxType: string | unde
   bucket[category] += Math.abs(amount);
 }
 
+function sourceFromParam(value: string | null): SourceType {
+  if (value === "bank_transactions") return "bank_transactions";
+  if (value === "manual_journals") return "manual_journals";
+  return "invoices";
+}
+
+function addSkipReason(skipReasons: SkipReasons, reason: string) {
+  skipReasons[reason] = (skipReasons[reason] || 0) + 1;
+}
+
+function buildNextUrl(
+  clientId: string,
+  source: SourceType,
+  nextOffset: number,
+  limit: number
+) {
+  return `${APP_URL}/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}`;
+}
+
 async function refreshXeroToken(refreshToken: string) {
   const xeroClientId = process.env.XERO_CLIENT_ID;
   const xeroClientSecret = process.env.XERO_CLIENT_SECRET;
@@ -193,12 +228,6 @@ async function xeroFetch(url: string, accessToken: string, tenantId: string) {
   });
 }
 
-function sourceFromParam(value: string | null): SourceType {
-  if (value === "bank_transactions") return "bank_transactions";
-  if (value === "manual_journals") return "manual_journals";
-  return "invoices";
-}
-
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -211,15 +240,23 @@ export async function GET(request: Request) {
       MAX_LIMIT
     );
     const reset = url.searchParams.get("reset") === "true";
+    const debug = url.searchParams.get("debug") === "true";
 
     if (!clientId) {
       return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
     }
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return NextResponse.json(
+        { error: "Missing Supabase environment variables" },
+        { status: 500 }
+      );
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     const { data: client } = await supabase
       .from("clients")
@@ -358,18 +395,35 @@ export async function GET(request: Request) {
     let linesImported = 0;
     let recordsSkipped = 0;
 
+    const skipReasons: SkipReasons = {};
+    const skippedRecords: SkippedRecord[] = [];
+    const importedRecords: ImportedRecord[] = [];
+
+    function skip(recordId: string | null, reason: string) {
+      recordsSkipped += 1;
+      addSkipReason(skipReasons, reason);
+
+      if (debug && skippedRecords.length < 50) {
+        skippedRecords.push({
+          id: recordId,
+          reason,
+          source,
+        });
+      }
+    }
+
     for (const summary of batch) {
-      const recordId = summary?.[detailIdKey];
+      const recordId = summary?.[detailIdKey] || null;
 
       if (!recordId) {
-        recordsSkipped += 1;
+        skip(null, "missing_record_id");
         continue;
       }
 
       const detailResponse = await fetchWithRefresh(`${detailUrlBase}/${recordId}`);
 
       if (!detailResponse.ok) {
-        recordsSkipped += 1;
+        skip(recordId, `detail_fetch_failed_status_${detailResponse.status}`);
         continue;
       }
 
@@ -377,88 +431,191 @@ export async function GET(request: Request) {
       const record = detailData[listKey]?.[0];
 
       if (!record) {
-        recordsSkipped += 1;
+        skip(recordId, "missing_detail_record");
         continue;
       }
 
       if (source === "invoices") {
         const invoice = record as XeroInvoice;
 
-        if (invoice.Type !== "ACCREC") continue;
-        if (invoice.Status === "VOIDED" || invoice.Status === "DELETED") continue;
+        if (invoice.Type !== "ACCREC") {
+          skip(recordId, "invoice_not_accounts_receivable");
+          continue;
+        }
+
+        if (invoice.Status === "VOIDED" || invoice.Status === "DELETED") {
+          skip(recordId, "invoice_voided_or_deleted");
+          continue;
+        }
 
         const recordDate = parseXeroDate(invoice.DateString || invoice.Date);
-        if (!recordDate) continue;
+
+        if (!recordDate) {
+          skip(recordId, "invoice_missing_or_invalid_date");
+          continue;
+        }
 
         const bucket = bucketMap.get(monthKey(recordDate));
-        if (!bucket) continue;
+
+        if (!bucket) {
+          skip(recordId, "invoice_outside_import_window");
+          continue;
+        }
+
+        let importedLinesForRecord = 0;
 
         for (const line of invoice.LineItems || []) {
           const amount = safeNumber(line.LineAmount);
+
           if (amount === 0) continue;
 
           addToBucket(bucket, amount, line.TaxType);
           linesImported += 1;
+          importedLinesForRecord += 1;
         }
 
-        recordsImported += 1;
+        if (importedLinesForRecord > 0) {
+          recordsImported += 1;
+
+          if (debug && importedRecords.length < 50) {
+            importedRecords.push({
+              id: recordId,
+              source,
+              linesImported: importedLinesForRecord,
+            });
+          }
+        } else {
+          skip(recordId, "invoice_no_non_zero_lines");
+        }
       }
 
       if (source === "bank_transactions") {
         const transaction = record as XeroBankTransaction;
 
-        if (transaction.Type !== "RECEIVE") continue;
-        if (transaction.Status === "VOIDED" || transaction.Status === "DELETED") continue;
+        if (transaction.Type !== "RECEIVE") {
+          skip(recordId, "bank_transaction_not_receive");
+          continue;
+        }
+
+        if (transaction.Status === "VOIDED" || transaction.Status === "DELETED") {
+          skip(recordId, "bank_transaction_voided_or_deleted");
+          continue;
+        }
 
         const recordDate = parseXeroDate(transaction.DateString || transaction.Date);
-        if (!recordDate) continue;
+
+        if (!recordDate) {
+          skip(recordId, "bank_transaction_missing_or_invalid_date");
+          continue;
+        }
 
         const bucket = bucketMap.get(monthKey(recordDate));
-        if (!bucket) continue;
 
-        let counted = false;
+        if (!bucket) {
+          skip(recordId, "bank_transaction_outside_import_window");
+          continue;
+        }
+
+        let importedLinesForRecord = 0;
+        let revenueAccountLinesFound = 0;
+        let zeroAmountLinesFound = 0;
 
         for (const line of transaction.LineItems || []) {
           if (!isRevenueAccount(line.AccountCode)) continue;
 
+          revenueAccountLinesFound += 1;
+
           const amount = safeNumber(line.LineAmount);
-          if (amount === 0) continue;
+
+          if (amount === 0) {
+            zeroAmountLinesFound += 1;
+            continue;
+          }
 
           addToBucket(bucket, amount, line.TaxType);
           linesImported += 1;
-          counted = true;
+          importedLinesForRecord += 1;
         }
 
-        if (counted) recordsImported += 1;
-        else recordsSkipped += 1;
+        if (importedLinesForRecord > 0) {
+          recordsImported += 1;
+
+          if (debug && importedRecords.length < 50) {
+            importedRecords.push({
+              id: recordId,
+              source,
+              linesImported: importedLinesForRecord,
+            });
+          }
+        } else if (revenueAccountLinesFound === 0) {
+          skip(recordId, "bank_transaction_no_revenue_account_lines");
+        } else if (zeroAmountLinesFound > 0) {
+          skip(recordId, "bank_transaction_revenue_lines_zero_amount");
+        } else {
+          skip(recordId, "bank_transaction_no_importable_lines");
+        }
       }
 
       if (source === "manual_journals") {
         const journal = record as XeroManualJournal;
 
-        if (journal.Status !== "POSTED") continue;
+        if (journal.Status !== "POSTED") {
+          skip(recordId, "manual_journal_not_posted");
+          continue;
+        }
 
         const recordDate = parseXeroDate(journal.Date);
-        if (!recordDate) continue;
+
+        if (!recordDate) {
+          skip(recordId, "manual_journal_missing_or_invalid_date");
+          continue;
+        }
 
         const bucket = bucketMap.get(monthKey(recordDate));
-        if (!bucket) continue;
 
-        let counted = false;
+        if (!bucket) {
+          skip(recordId, "manual_journal_outside_import_window");
+          continue;
+        }
+
+        let importedLinesForRecord = 0;
+        let revenueAccountLinesFound = 0;
+        let zeroAmountLinesFound = 0;
 
         for (const line of journal.JournalLines || []) {
           if (!isRevenueAccount(line.AccountCode)) continue;
 
+          revenueAccountLinesFound += 1;
+
           const amount = safeNumber(line.LineAmount);
-          if (amount === 0) continue;
+
+          if (amount === 0) {
+            zeroAmountLinesFound += 1;
+            continue;
+          }
 
           addToBucket(bucket, amount, line.TaxType);
           linesImported += 1;
-          counted = true;
+          importedLinesForRecord += 1;
         }
 
-        if (counted) recordsImported += 1;
-        else recordsSkipped += 1;
+        if (importedLinesForRecord > 0) {
+          recordsImported += 1;
+
+          if (debug && importedRecords.length < 50) {
+            importedRecords.push({
+              id: recordId,
+              source,
+              linesImported: importedLinesForRecord,
+            });
+          }
+        } else if (revenueAccountLinesFound === 0) {
+          skip(recordId, "manual_journal_no_revenue_account_lines");
+        } else if (zeroAmountLinesFound > 0) {
+          skip(recordId, "manual_journal_revenue_lines_zero_amount");
+        } else {
+          skip(recordId, "manual_journal_no_importable_lines");
+        }
       }
     }
 
@@ -586,6 +743,10 @@ export async function GET(request: Request) {
       recordsImported,
       linesImported,
       recordsSkipped,
+      skipReasons,
+      debugEnabled: debug,
+      importedRecords: debug ? importedRecords : undefined,
+      skippedRecords: debug ? skippedRecords : undefined,
       rollingTurnover: Number(rollingTurnover.toFixed(2)),
       thresholdPercent: Number(thresholdPercent.toFixed(2)),
       riskStatus,
@@ -594,9 +755,7 @@ export async function GET(request: Request) {
         fromDate: isoDate(fromDate),
         toDate: isoDate(toDate),
       },
-      nextUrl: done
-        ? null
-        : `/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}`,
+      nextUrl: done ? null : buildNextUrl(clientId, source, nextOffset, limit),
     });
   } catch (error) {
     return NextResponse.json(
