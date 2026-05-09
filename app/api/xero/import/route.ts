@@ -26,6 +26,7 @@ type MonthBucket = {
 };
 
 type SkipReasons = Record<string, number>;
+type AccountCodesSeen = Record<string, number>;
 
 type SkippedRecord = {
   id: string | null;
@@ -37,6 +38,16 @@ type ImportedRecord = {
   id: string | null;
   source: SourceType;
   linesImported: number;
+};
+
+type DebugLine = {
+  recordId: string | null;
+  source: SourceType;
+  accountCode: string | null;
+  lineAmount: number;
+  taxType: string | null;
+  description: string | null;
+  revenueMatched: boolean;
 };
 
 type XeroLineItem = {
@@ -157,6 +168,11 @@ function safeNumber(value: unknown) {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function normaliseAccountCode(accountCode: string | undefined) {
+  const value = String(accountCode || "").trim();
+  return value || "NO_ACCOUNT_CODE";
+}
+
 function isRevenueAccount(accountCode: string | undefined) {
   if (!accountCode) return false;
 
@@ -176,8 +192,8 @@ function sourceFromParam(value: string | null): SourceType {
   return "invoices";
 }
 
-function addSkipReason(skipReasons: SkipReasons, reason: string) {
-  skipReasons[reason] = (skipReasons[reason] || 0) + 1;
+function addCount(target: Record<string, number>, key: string) {
+  target[key] = (target[key] || 0) + 1;
 }
 
 function buildNextUrl(
@@ -186,7 +202,7 @@ function buildNextUrl(
   nextOffset: number,
   limit: number
 ) {
-  return `${APP_URL}/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}`;
+  return `${APP_URL}/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}&debug=true`;
 }
 
 async function refreshXeroToken(refreshToken: string) {
@@ -396,12 +412,18 @@ export async function GET(request: Request) {
     let recordsSkipped = 0;
 
     const skipReasons: SkipReasons = {};
+    const accountCodesSeen: AccountCodesSeen = {};
+    const manualJournalAccountCodesSeen: AccountCodesSeen = {};
+    const bankTransactionAccountCodesSeen: AccountCodesSeen = {};
+    const invoiceAccountCodesSeen: AccountCodesSeen = {};
+
     const skippedRecords: SkippedRecord[] = [];
     const importedRecords: ImportedRecord[] = [];
+    const debugLines: DebugLine[] = [];
 
     function skip(recordId: string | null, reason: string) {
       recordsSkipped += 1;
-      addSkipReason(skipReasons, reason);
+      addCount(skipReasons, reason);
 
       if (debug && skippedRecords.length < 50) {
         skippedRecords.push({
@@ -410,6 +432,47 @@ export async function GET(request: Request) {
           source,
         });
       }
+    }
+
+    function recordAccountCode(sourceType: SourceType, accountCode: string | undefined) {
+      const normalisedCode = normaliseAccountCode(accountCode);
+
+      addCount(accountCodesSeen, normalisedCode);
+
+      if (sourceType === "manual_journals") {
+        addCount(manualJournalAccountCodesSeen, normalisedCode);
+      }
+
+      if (sourceType === "bank_transactions") {
+        addCount(bankTransactionAccountCodesSeen, normalisedCode);
+      }
+
+      if (sourceType === "invoices") {
+        addCount(invoiceAccountCodesSeen, normalisedCode);
+      }
+    }
+
+    function addDebugLine(
+      recordId: string | null,
+      sourceType: SourceType,
+      line: {
+        AccountCode?: string;
+        LineAmount?: number;
+        TaxType?: string;
+        Description?: string;
+      }
+    ) {
+      if (!debug || debugLines.length >= 100) return;
+
+      debugLines.push({
+        recordId,
+        source: sourceType,
+        accountCode: normaliseAccountCode(line.AccountCode),
+        lineAmount: safeNumber(line.LineAmount),
+        taxType: line.TaxType || null,
+        description: line.Description || null,
+        revenueMatched: isRevenueAccount(line.AccountCode),
+      });
     }
 
     for (const summary of batch) {
@@ -465,6 +528,9 @@ export async function GET(request: Request) {
         let importedLinesForRecord = 0;
 
         for (const line of invoice.LineItems || []) {
+          recordAccountCode("invoices", line.AccountCode);
+          addDebugLine(recordId, "invoices", line);
+
           const amount = safeNumber(line.LineAmount);
 
           if (amount === 0) continue;
@@ -521,6 +587,9 @@ export async function GET(request: Request) {
         let zeroAmountLinesFound = 0;
 
         for (const line of transaction.LineItems || []) {
+          recordAccountCode("bank_transactions", line.AccountCode);
+          addDebugLine(recordId, "bank_transactions", line);
+
           if (!isRevenueAccount(line.AccountCode)) continue;
 
           revenueAccountLinesFound += 1;
@@ -583,6 +652,9 @@ export async function GET(request: Request) {
         let zeroAmountLinesFound = 0;
 
         for (const line of journal.JournalLines || []) {
+          recordAccountCode("manual_journals", line.AccountCode);
+          addDebugLine(recordId, "manual_journals", line);
+
           if (!isRevenueAccount(line.AccountCode)) continue;
 
           revenueAccountLinesFound += 1;
@@ -744,9 +816,14 @@ export async function GET(request: Request) {
       linesImported,
       recordsSkipped,
       skipReasons,
+      accountCodesSeen,
+      manualJournalAccountCodesSeen,
+      bankTransactionAccountCodesSeen,
+      invoiceAccountCodesSeen,
       debugEnabled: debug,
       importedRecords: debug ? importedRecords : undefined,
       skippedRecords: debug ? skippedRecords : undefined,
+      debugLines: debug ? debugLines : undefined,
       rollingTurnover: Number(rollingTurnover.toFixed(2)),
       thresholdPercent: Number(thresholdPercent.toFixed(2)),
       riskStatus,
