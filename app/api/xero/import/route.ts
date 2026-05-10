@@ -179,11 +179,6 @@ function isXeroRevenueAccount(account: XeroAccount | undefined) {
   );
 }
 
-function addToBucket(bucket: MonthBucket, amount: number, taxType: string | undefined) {
-  const category = classifyTaxType(taxType);
-  bucket[category] += Math.abs(amount);
-}
-
 function sourceFromParam(value: string | null): SourceType {
   if (value === "bank_transactions") return "bank_transactions";
   if (value === "manual_journals") return "manual_journals";
@@ -255,7 +250,6 @@ export async function GET(request: Request) {
       Math.max(Number(url.searchParams.get("limit") || DEFAULT_LIMIT), 1),
       MAX_LIMIT
     );
-    const reset = url.searchParams.get("reset") === "true";
     const debug = url.searchParams.get("debug") === "true";
 
     if (!clientId) {
@@ -297,14 +291,6 @@ export async function GET(request: Request) {
         },
         { status: 404 }
       );
-    }
-
-    if (reset && offset === 0) {
-      await supabase
-        .from("turnover_entries")
-        .delete()
-        .eq("client_id", clientId)
-        .eq("source", "xero");
     }
 
     let accessToken = connection.access_token;
@@ -370,8 +356,8 @@ export async function GET(request: Request) {
         attempt += 1;
       }
 
-      return NextResponse.json(
-        {
+      return new Response(
+        JSON.stringify({
           error: "Xero rate limit reached",
           status: 429,
           details:
@@ -380,9 +366,12 @@ export async function GET(request: Request) {
           offset,
           limit,
           clientId,
-        },
-        { status: 429 }
-      ) as unknown as Response;
+        }),
+        {
+          status: 429,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     }
 
     const accountsResponse = await fetchWithRefreshAndRateLimit(
@@ -508,6 +497,7 @@ export async function GET(request: Request) {
     let recordsImported = 0;
     let linesImported = 0;
     let recordsSkipped = 0;
+    let linesUpserted = 0;
 
     const skipReasons: Record<string, number> = {};
     const accountCodesSeen: Record<string, number> = {};
@@ -516,6 +506,8 @@ export async function GET(request: Request) {
     const debugLines: any[] = [];
     const skippedRecords: any[] = [];
     const importedRecords: any[] = [];
+
+    const importedLineRows: any[] = [];
 
     function skip(recordId: string | null, reason: string) {
       recordsSkipped += 1;
@@ -556,6 +548,42 @@ export async function GET(request: Request) {
           revenueMatched,
         });
       }
+    }
+
+    function addImportedLineRow(params: {
+      recordId: string;
+      lineIndex: number;
+      recordDate: Date;
+      line: XeroLineItem | XeroManualJournalLine;
+    }) {
+      const accountCode = normaliseAccountCode(params.line.AccountCode);
+      const account = accountMap.get(accountCode);
+      const vatCategory = classifyTaxType(params.line.TaxType);
+      const amount = Math.abs(safeNumber(params.line.LineAmount));
+      const monthDateKey = monthKey(params.recordDate);
+      const bucket = bucketMap.get(monthDateKey);
+
+      if (!bucket) return;
+
+      const sourceLineKey = `${source}_${params.recordId}_${params.lineIndex}_${accountCode}`;
+
+      importedLineRows.push({
+        client_id: clientId,
+        source,
+        source_record_id: params.recordId,
+        source_line_key: sourceLineKey,
+        transaction_date: isoDate(params.recordDate),
+        month_label: bucket.month_label,
+        account_code: accountCode || null,
+        account_name: account?.Name || null,
+        account_type: account?.Type || null,
+        account_class: account?.Class || null,
+        description: params.line.Description || null,
+        tax_type: params.line.TaxType || null,
+        vat_category: vatCategory,
+        amount: Number(amount.toFixed(2)),
+        updated_at: new Date().toISOString(),
+      });
     }
 
     for (const summary of batch) {
@@ -610,13 +638,19 @@ export async function GET(request: Request) {
 
         let importedLinesForRecord = 0;
 
-        for (const line of invoice.LineItems || []) {
+        for (const [lineIndex, line] of (invoice.LineItems || []).entries()) {
           inspectLine(recordId, line);
 
           const amount = safeNumber(line.LineAmount);
           if (amount === 0) continue;
 
-          addToBucket(bucket, amount, line.TaxType);
+          addImportedLineRow({
+            recordId,
+            lineIndex,
+            recordDate,
+            line,
+          });
+
           linesImported += 1;
           importedLinesForRecord += 1;
         }
@@ -665,7 +699,7 @@ export async function GET(request: Request) {
         let revenueAccountLinesFound = 0;
         let zeroAmountLinesFound = 0;
 
-        for (const line of transaction.LineItems || []) {
+        for (const [lineIndex, line] of (transaction.LineItems || []).entries()) {
           inspectLine(recordId, line);
 
           if (!isRevenueAccount(line.AccountCode)) continue;
@@ -678,7 +712,13 @@ export async function GET(request: Request) {
             continue;
           }
 
-          addToBucket(bucket, amount, line.TaxType);
+          addImportedLineRow({
+            recordId,
+            lineIndex,
+            recordDate,
+            line,
+          });
+
           linesImported += 1;
           importedLinesForRecord += 1;
         }
@@ -726,7 +766,7 @@ export async function GET(request: Request) {
         let revenueAccountLinesFound = 0;
         let zeroAmountLinesFound = 0;
 
-        for (const line of journal.JournalLines || []) {
+        for (const [lineIndex, line] of (journal.JournalLines || []).entries()) {
           inspectLine(recordId, line);
 
           if (!isRevenueAccount(line.AccountCode)) continue;
@@ -739,7 +779,13 @@ export async function GET(request: Request) {
             continue;
           }
 
-          addToBucket(bucket, amount, line.TaxType);
+          addImportedLineRow({
+            recordId,
+            lineIndex,
+            recordDate,
+            line,
+          });
+
           linesImported += 1;
           importedLinesForRecord += 1;
         }
@@ -764,38 +810,74 @@ export async function GET(request: Request) {
       }
     }
 
-    const { data: existingRows } = await supabase
-      .from("turnover_entries")
-      .select(
-        "client_id,month_label,standard_rated,reduced_rated,zero_rated,exempt,out_of_scope,source"
-      )
-      .eq("client_id", clientId)
-      .eq("source", "xero");
+    if (importedLineRows.length > 0) {
+      const { error: importedLinesError } = await supabase
+        .from("xero_imported_lines")
+        .upsert(importedLineRows, {
+          onConflict: "client_id,source_line_key",
+        });
 
-    const rowsToUpsert = buckets.map((bucket) => {
-      const existing = existingRows?.find(
-        (row) => row.month_label === bucket.month_label
+      if (importedLinesError) {
+        return NextResponse.json(
+          {
+            error: "Could not save imported Xero lines",
+            details: importedLinesError.message,
+          },
+          { status: 500 }
+        );
+      }
+
+      linesUpserted = importedLineRows.length;
+    }
+
+    const { data: allImportedLines, error: importedLinesReadError } = await supabase
+      .from("xero_imported_lines")
+      .select("month_label,vat_category,amount")
+      .eq("client_id", clientId);
+
+    if (importedLinesReadError) {
+      return NextResponse.json(
+        {
+          error: "Could not read imported Xero lines for recalculation",
+          details: importedLinesReadError.message,
+        },
+        { status: 500 }
+      );
+    }
+
+    const recalculatedBuckets = getLastCompleted12Months().buckets;
+
+    for (const row of allImportedLines || []) {
+      const bucket = recalculatedBuckets.find(
+        (item) => item.month_label === row.month_label
       );
 
-      return {
-        client_id: clientId,
-        month_label: bucket.month_label,
-        standard_rated: Number(
-          (Number(existing?.standard_rated || 0) + bucket.standard_rated).toFixed(2)
-        ),
-        reduced_rated: Number(
-          (Number(existing?.reduced_rated || 0) + bucket.reduced_rated).toFixed(2)
-        ),
-        zero_rated: Number(
-          (Number(existing?.zero_rated || 0) + bucket.zero_rated).toFixed(2)
-        ),
-        exempt: Number((Number(existing?.exempt || 0) + bucket.exempt).toFixed(2)),
-        out_of_scope: Number(
-          (Number(existing?.out_of_scope || 0) + bucket.out_of_scope).toFixed(2)
-        ),
-        source: "xero",
-      };
-    });
+      if (!bucket) continue;
+
+      const category = String(row.vat_category || "") as VatCategory;
+      const amount = safeNumber(row.amount);
+
+      if (
+        category === "standard_rated" ||
+        category === "reduced_rated" ||
+        category === "zero_rated" ||
+        category === "exempt" ||
+        category === "out_of_scope"
+      ) {
+        bucket[category] += amount;
+      }
+    }
+
+    const rowsToUpsert = recalculatedBuckets.map((bucket) => ({
+      client_id: clientId,
+      month_label: bucket.month_label,
+      standard_rated: Number(bucket.standard_rated.toFixed(2)),
+      reduced_rated: Number(bucket.reduced_rated.toFixed(2)),
+      zero_rated: Number(bucket.zero_rated.toFixed(2)),
+      exempt: Number(bucket.exempt.toFixed(2)),
+      out_of_scope: Number(bucket.out_of_scope.toFixed(2)),
+      source: "xero",
+    }));
 
     const { error: upsertError } = await supabase
       .from("turnover_entries")
@@ -806,20 +888,14 @@ export async function GET(request: Request) {
     if (upsertError) {
       return NextResponse.json(
         {
-          error: "Could not save batch turnover",
+          error: "Could not save recalculated turnover",
           details: upsertError.message,
         },
         { status: 500 }
       );
     }
 
-    const { data: latestRows } = await supabase
-      .from("turnover_entries")
-      .select("standard_rated,reduced_rated,zero_rated")
-      .eq("client_id", clientId)
-      .eq("source", "xero");
-
-    const rollingTurnover = (latestRows || []).reduce(
+    const rollingTurnover = recalculatedBuckets.reduce(
       (sum, row) =>
         sum +
         Number(row.standard_rated || 0) +
@@ -844,7 +920,7 @@ export async function GET(request: Request) {
       rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
       expected_next_30_days: 0,
       risk_status: riskStatus,
-      advice_note: `Rate-limit-safe batch import from Xero source: ${source}`,
+      advice_note: `Duplicate-safe Xero batch import from source: ${source}`,
     });
 
     let alertType: string | null = null;
@@ -874,7 +950,7 @@ export async function GET(request: Request) {
     const done = nextOffset >= summaries.length;
 
     return NextResponse.json({
-      message: "Rate-limit-safe Xero batch import complete",
+      message: "Duplicate-safe Xero batch import complete",
       clientId,
       clientName: client?.name || null,
       source,
@@ -894,6 +970,7 @@ export async function GET(request: Request) {
       recordsInThisBatch: batch.length,
       recordsImported,
       linesImported,
+      linesUpserted,
       recordsSkipped,
       skipReasons,
       revenueAccountCodes,
@@ -918,7 +995,7 @@ export async function GET(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        error: "Unexpected rate-limit-safe batch import failure",
+        error: "Unexpected duplicate-safe batch import failure",
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
