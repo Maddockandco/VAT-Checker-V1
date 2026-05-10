@@ -4,8 +4,8 @@ import { NextResponse } from "next/server";
 const VAT_THRESHOLD = 90000;
 
 // Safer batch sizes to avoid blank browser screens / Vercel timeout issues.
-const DEFAULT_LIMIT = 5;
-const MAX_LIMIT = 10;
+const DEFAULT_LIMIT = 1;
+const MAX_LIMIT = 3;
 
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
@@ -13,8 +13,8 @@ const XERO_DELAY_BETWEEN_CALLS_MS = 1200;
 const XERO_RATE_LIMIT_WAIT_MS = 15000;
 const XERO_MAX_RETRIES = 5;
 
-const DEBUG_RECORD_LIMIT = 10;
-const DEBUG_LINE_LIMIT = 25;
+const DEBUG_RECORD_LIMIT = 3;
+const DEBUG_LINE_LIMIT = 5;
 
 type SourceType = "invoices" | "bank_transactions" | "manual_journals";
 
