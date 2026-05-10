@@ -6,7 +6,7 @@ const DEFAULT_LIMIT = 25;
 const MAX_LIMIT = 50;
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
-const XERO_DELAY_BETWEEN_CALLS_MS = 1200;
+const XERO_DELAY_BETWEEN_CALLS_MS = 100;
 const XERO_RATE_LIMIT_WAIT_MS = 15000;
 const XERO_MAX_RETRIES = 5;
 
