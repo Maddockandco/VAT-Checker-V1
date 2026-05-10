@@ -2,13 +2,19 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 const VAT_THRESHOLD = 90000;
-const DEFAULT_LIMIT = 25;
-const MAX_LIMIT = 50;
+
+// Safer batch sizes to avoid blank browser screens / Vercel timeout issues.
+const DEFAULT_LIMIT = 5;
+const MAX_LIMIT = 10;
+
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
-const XERO_DELAY_BETWEEN_CALLS_MS = 100;
+const XERO_DELAY_BETWEEN_CALLS_MS = 1200;
 const XERO_RATE_LIMIT_WAIT_MS = 15000;
 const XERO_MAX_RETRIES = 5;
+
+const DEBUG_RECORD_LIMIT = 10;
+const DEBUG_LINE_LIMIT = 25;
 
 type SourceType = "invoices" | "bank_transactions" | "manual_journals";
 
@@ -212,8 +218,7 @@ async function refreshXeroToken(refreshToken: string) {
     method: "POST",
     headers: {
       Authorization:
-        "Basic " +
-        Buffer.from(`${xeroClientId}:${xeroClientSecret}`).toString("base64"),
+        "Basic " + Buffer.from(`${xeroClientId}:${xeroClientSecret}`).toString("base64"),
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
@@ -506,13 +511,14 @@ export async function GET(request: Request) {
     const debugLines: any[] = [];
     const skippedRecords: any[] = [];
     const importedRecords: any[] = [];
+
     const importedLineRows: any[] = [];
 
     function skip(recordId: string | null, reason: string) {
       recordsSkipped += 1;
       addCount(skipReasons, reason);
 
-      if (debug && skippedRecords.length < 20) {
+      if (debug && skippedRecords.length < DEBUG_RECORD_LIMIT) {
         skippedRecords.push({ id: recordId, source, reason });
       }
     }
@@ -533,7 +539,7 @@ export async function GET(request: Request) {
         addCount(nonRevenueAccountCodesSeen, code);
       }
 
-      if (debug && debugLines.length < 40) {
+      if (debug && debugLines.length < DEBUG_LINE_LIMIT) {
         debugLines.push({
           recordId,
           source,
@@ -659,7 +665,7 @@ export async function GET(request: Request) {
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
 
-          if (debug && importedRecords.length < 20) {
+          if (debug && importedRecords.length < DEBUG_RECORD_LIMIT) {
             importedRecords.push({
               id: recordId,
               source,
@@ -727,7 +733,7 @@ export async function GET(request: Request) {
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
 
-          if (debug && importedRecords.length < 20) {
+          if (debug && importedRecords.length < DEBUG_RECORD_LIMIT) {
             importedRecords.push({
               id: recordId,
               source,
@@ -794,7 +800,7 @@ export async function GET(request: Request) {
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
 
-          if (debug && importedRecords.length < 20) {
+          if (debug && importedRecords.length < DEBUG_RECORD_LIMIT) {
             importedRecords.push({
               id: recordId,
               source,
@@ -834,8 +840,7 @@ export async function GET(request: Request) {
     const { data: allImportedLines, error: importedLinesReadError } = await supabase
       .from("xero_imported_lines")
       .select("month_label,vat_category,amount")
-      .eq("client_id", clientId)
-      .limit(5000);
+      .eq("client_id", clientId);
 
     if (importedLinesReadError) {
       return NextResponse.json(
@@ -917,18 +922,13 @@ export async function GET(request: Request) {
         ? "Warning"
         : "Low Risk";
 
-    const nextOffset = offset + limit;
-    const done = nextOffset >= summaries.length;
-
-    if (done) {
-      await supabase.from("vat_reviews").insert({
-        client_id: clientId,
-        rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
-        expected_next_30_days: 0,
-        risk_status: riskStatus,
-        advice_note: `Duplicate-safe Xero batch import from source: ${source}`,
-      });
-    }
+    await supabase.from("vat_reviews").insert({
+      client_id: clientId,
+      rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
+      expected_next_30_days: 0,
+      risk_status: riskStatus,
+      advice_note: `Duplicate-safe Xero batch import from source: ${source}`,
+    });
 
     let alertType: string | null = null;
     let alertMessage = "";
@@ -944,7 +944,7 @@ export async function GET(request: Request) {
       alertMessage = "VAT turnover above 80% – monitor closely.";
     }
 
-    if (done && alertType) {
+    if (alertType) {
       await supabase.from("vat_alerts").insert({
         client_id: clientId,
         threshold_percentage: Number(thresholdPercent.toFixed(2)),
@@ -952,6 +952,9 @@ export async function GET(request: Request) {
         message: alertMessage,
       });
     }
+
+    const nextOffset = offset + limit;
+    const done = nextOffset >= summaries.length;
 
     return NextResponse.json({
       message: "Duplicate-safe Xero batch import complete",
@@ -983,6 +986,13 @@ export async function GET(request: Request) {
       revenueAccountCodesSeen,
       nonRevenueAccountCodesSeen,
       debugEnabled: debug,
+      debugLimits: debug
+        ? {
+            importedRecordsMax: DEBUG_RECORD_LIMIT,
+            skippedRecordsMax: DEBUG_RECORD_LIMIT,
+            debugLinesMax: DEBUG_LINE_LIMIT,
+          }
+        : undefined,
       importedRecords: debug ? importedRecords : undefined,
       skippedRecords: debug ? skippedRecords : undefined,
       debugLines: debug ? debugLines : undefined,
