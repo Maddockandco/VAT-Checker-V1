@@ -10,6 +10,9 @@ const XERO_DELAY_BETWEEN_CALLS_MS = 1200;
 const XERO_RATE_LIMIT_WAIT_MS = 15000;
 const XERO_MAX_RETRIES = 5;
 
+const DEBUG_RECORD_LIMIT = 10;
+const DEBUG_LINE_LIMIT = 25;
+
 type SourceType = "invoices" | "bank_transactions" | "manual_journals";
 
 type VatCategory =
@@ -193,11 +196,9 @@ function buildNextUrl(
   clientId: string,
   source: SourceType,
   nextOffset: number,
-  limit: number,
-  debug: boolean
+  limit: number
 ) {
-  const debugPart = debug ? "&debug=true" : "";
-  return `${APP_URL}/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}${debugPart}`;
+  return `${APP_URL}/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}`;
 }
 
 async function refreshXeroToken(refreshToken: string) {
@@ -250,6 +251,7 @@ export async function GET(request: Request) {
       Math.max(Number(url.searchParams.get("limit") || DEFAULT_LIMIT), 1),
       MAX_LIMIT
     );
+
     const debug = url.searchParams.get("debug") === "true";
 
     if (!clientId) {
@@ -513,7 +515,7 @@ export async function GET(request: Request) {
       recordsSkipped += 1;
       addCount(skipReasons, reason);
 
-      if (debug && skippedRecords.length < 50) {
+      if (debug && skippedRecords.length < DEBUG_RECORD_LIMIT) {
         skippedRecords.push({ id: recordId, source, reason });
       }
     }
@@ -534,7 +536,7 @@ export async function GET(request: Request) {
         addCount(nonRevenueAccountCodesSeen, code);
       }
 
-      if (debug && debugLines.length < 100) {
+      if (debug && debugLines.length < DEBUG_LINE_LIMIT) {
         debugLines.push({
           recordId,
           source,
@@ -641,6 +643,8 @@ export async function GET(request: Request) {
         for (const [lineIndex, line] of (invoice.LineItems || []).entries()) {
           inspectLine(recordId, line);
 
+          if (!isRevenueAccount(line.AccountCode)) continue;
+
           const amount = safeNumber(line.LineAmount);
           if (amount === 0) continue;
 
@@ -658,7 +662,7 @@ export async function GET(request: Request) {
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
 
-          if (debug && importedRecords.length < 50) {
+          if (debug && importedRecords.length < DEBUG_RECORD_LIMIT) {
             importedRecords.push({
               id: recordId,
               source,
@@ -666,7 +670,7 @@ export async function GET(request: Request) {
             });
           }
         } else {
-          skip(recordId, "invoice_no_non_zero_lines");
+          skip(recordId, "invoice_no_revenue_account_lines");
         }
       }
 
@@ -726,7 +730,7 @@ export async function GET(request: Request) {
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
 
-          if (debug && importedRecords.length < 50) {
+          if (debug && importedRecords.length < DEBUG_RECORD_LIMIT) {
             importedRecords.push({
               id: recordId,
               source,
@@ -793,7 +797,7 @@ export async function GET(request: Request) {
         if (importedLinesForRecord > 0) {
           recordsImported += 1;
 
-          if (debug && importedRecords.length < 50) {
+          if (debug && importedRecords.length < DEBUG_RECORD_LIMIT) {
             importedRecords.push({
               id: recordId,
               source,
@@ -949,7 +953,7 @@ export async function GET(request: Request) {
     const nextOffset = offset + limit;
     const done = nextOffset >= summaries.length;
 
-    return NextResponse.json({
+    const responsePayload: Record<string, any> = {
       message: "Duplicate-safe Xero batch import complete",
       clientId,
       clientName: client?.name || null,
@@ -962,11 +966,6 @@ export async function GET(request: Request) {
       tokenWasRefreshed,
       rateLimitHit,
       rateLimitRetryCount,
-      rateLimitSettings: {
-        delayBetweenCallsMs: XERO_DELAY_BETWEEN_CALLS_MS,
-        waitAfter429Ms: XERO_RATE_LIMIT_WAIT_MS,
-        maxRetries: XERO_MAX_RETRIES,
-      },
       recordsInThisBatch: batch.length,
       recordsImported,
       linesImported,
@@ -974,14 +973,15 @@ export async function GET(request: Request) {
       recordsSkipped,
       skipReasons,
       revenueAccountCodes,
-      revenueAccounts,
       accountCodesSeen,
       revenueAccountCodesSeen,
       nonRevenueAccountCodesSeen,
       debugEnabled: debug,
-      importedRecords: debug ? importedRecords : undefined,
-      skippedRecords: debug ? skippedRecords : undefined,
-      debugLines: debug ? debugLines : undefined,
+      debugCaps: {
+        importedRecordsLimit: DEBUG_RECORD_LIMIT,
+        skippedRecordsLimit: DEBUG_RECORD_LIMIT,
+        debugLinesLimit: DEBUG_LINE_LIMIT,
+      },
       rollingTurnover: Number(rollingTurnover.toFixed(2)),
       thresholdPercent: Number(thresholdPercent.toFixed(2)),
       riskStatus,
@@ -990,8 +990,17 @@ export async function GET(request: Request) {
         fromDate: isoDate(fromDate),
         toDate: isoDate(toDate),
       },
-      nextUrl: done ? null : buildNextUrl(clientId, source, nextOffset, limit, debug),
-    });
+      nextUrl: done ? null : buildNextUrl(clientId, source, nextOffset, limit),
+    };
+
+    if (debug) {
+      responsePayload.revenueAccounts = revenueAccounts;
+      responsePayload.importedRecords = importedRecords;
+      responsePayload.skippedRecords = skippedRecords;
+      responsePayload.debugLines = debugLines;
+    }
+
+    return NextResponse.json(responsePayload);
   } catch (error) {
     return NextResponse.json(
       {
