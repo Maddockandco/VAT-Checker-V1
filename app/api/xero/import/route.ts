@@ -2,195 +2,528 @@ import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
+
+const VAT_THRESHOLD = 90000;
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 5;
+
+const APP_URL =
+  process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
 const XERO_DELAY_BETWEEN_CALLS_MS = 500;
 const XERO_RATE_LIMIT_WAIT_MS = 15000;
 const XERO_MAX_RETRIES = 3;
 
-const TIMEOUT_MS = 12000;
+type SourceType =
+  | "invoices"
+  | "bank_transactions"
+  | "manual_journals";
 
-function timeoutFetch(url: string, options: RequestInit = {}) {
-  const controller = new AbortController();
+type XeroAccount = {
+  Code?: string;
+  Name?: string;
+  Type?: string;
+  Status?: string;
+  Class?: string;
+  TaxType?: string;
+};
 
-  const timeout = setTimeout(() => {
-    controller.abort();
-  }, TIMEOUT_MS);
+type XeroLineItem = {
+  Description?: string;
+  LineAmount?: number;
+  TaxType?: string;
+  AccountCode?: string;
+};
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function safeNumber(value: unknown) {
+  const parsed = Number(value || 0);
+  return Number.isFinite(parsed) ? parsed : 0;
+}
+
+function normaliseAccountCode(accountCode: string | undefined) {
+  return String(accountCode || "").trim();
+}
+
+function sourceFromParam(value: string | null): SourceType {
+  if (value === "bank_transactions") return "bank_transactions";
+  if (value === "manual_journals") return "manual_journals";
+  return "invoices";
+}
+
+function buildNextUrl(
+  clientId: string,
+  source: SourceType,
+  nextOffset: number,
+  limit: number,
+  debug: boolean
+) {
+  const debugPart = debug ? "&debug=true" : "";
+
+  return `${APP_URL}/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}${debugPart}`;
+}
+
+function isXeroRevenueAccount(account: XeroAccount | undefined) {
+  if (!account) return false;
+
+  const status = String(account.Status || "").toUpperCase();
+  const type = String(account.Type || "").toUpperCase();
+  const accountClass = String(account.Class || "").toUpperCase();
+
+  if (status === "ARCHIVED") return false;
+
+  return (
+    type === "REVENUE" ||
+    type === "SALES" ||
+    type === "OTHERINCOME" ||
+    accountClass === "REVENUE"
+  );
+}
+
+async function refreshXeroToken(refreshToken: string) {
+  const xeroClientId = process.env.XERO_CLIENT_ID;
+  const xeroClientSecret = process.env.XERO_CLIENT_SECRET;
+
+  if (!xeroClientId || !xeroClientSecret) {
+    throw new Error("Missing Xero client credentials");
+  }
+
+  const response = await fetch(
+    "https://identity.xero.com/connect/token",
+    {
+      method: "POST",
+      headers: {
+        Authorization:
+          "Basic " +
+          Buffer.from(
+            `${xeroClientId}:${xeroClientSecret}`
+          ).toString("base64"),
+        "Content-Type":
+          "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(await response.text());
+  }
+
+  return response.json();
+}
+
+async function xeroFetchOnce(
+  url: string,
+  accessToken: string,
+  tenantId: string
+) {
   return fetch(url, {
-    ...options,
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeout));
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      "Xero-tenant-id": tenantId,
+      Accept: "application/json",
+    },
+  });
 }
 
 export async function GET(request: Request) {
-  const steps: string[] = [];
-
   try {
-    steps.push("Route started");
-
     const url = new URL(request.url);
-    const clientId = url.searchParams.get("clientId");
-    const source = url.searchParams.get("source") || "bank_transactions";
-    const offset = Number(url.searchParams.get("offset") || 0);
-    const limit = Math.min(Number(url.searchParams.get("limit") || 1), 1);
 
-    steps.push("URL parameters read");
+    const clientId =
+      url.searchParams.get("clientId");
+
+    const source = sourceFromParam(
+      url.searchParams.get("source")
+    );
+
+    const offset = Math.max(
+      Number(url.searchParams.get("offset") || 0),
+      0
+    );
+
+    const limit = Math.min(
+      Math.max(
+        Number(
+          url.searchParams.get("limit") ||
+            DEFAULT_LIMIT
+        ),
+        1
+      ),
+      MAX_LIMIT
+    );
+
+    const debug =
+      url.searchParams.get("debug") === "true";
 
     if (!clientId) {
-      return NextResponse.json({
-        ok: false,
-        error: "Missing clientId",
-        steps,
-      });
+      return NextResponse.json(
+        { error: "Missing clientId" },
+        { status: 400 }
+      );
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabaseUrl =
+      process.env.NEXT_PUBLIC_SUPABASE_URL;
 
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      return NextResponse.json({
-        ok: false,
-        error: "Missing Supabase environment variables",
-        steps,
-      });
+    const supabaseServiceRoleKey =
+      process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (
+      !supabaseUrl ||
+      !supabaseServiceRoleKey
+    ) {
+      return NextResponse.json(
+        {
+          error:
+            "Missing Supabase environment variables",
+        },
+        { status: 500 }
+      );
     }
 
-    steps.push("Supabase environment variables found");
+    const supabase = createClient(
+      supabaseUrl,
+      supabaseServiceRoleKey
+    );
 
-    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
-
-    const { data: client, error: clientError } = await supabase
+    const { data: client } = await supabase
       .from("clients")
       .select("id,name")
       .eq("id", clientId)
       .single();
 
-    if (clientError || !client) {
-      return NextResponse.json({
-        ok: false,
-        error: "Client not found",
-        details: clientError?.message,
-        steps,
-      });
-    }
-
-    steps.push("Client found");
-
-    const { data: connection, error: connectionError } = await supabase
+    const {
+      data: connection,
+      error: connectionError,
+    } = await supabase
       .from("accounting_connections")
       .select("*")
       .eq("client_id", clientId)
       .eq("provider", "xero")
-      .order("connected_at", { ascending: false })
+      .order("connected_at", {
+        ascending: false,
+      })
       .limit(1)
       .single();
 
     if (connectionError || !connection) {
-      return NextResponse.json({
-        ok: false,
-        error: "No Xero connection found",
-        details: connectionError?.message,
-        steps,
-      });
+      return NextResponse.json(
+        {
+          error: "No Xero connection found",
+          details: connectionError?.message,
+        },
+        { status: 404 }
+      );
     }
 
-    steps.push("Xero connection found");
+    let accessToken = connection.access_token;
+    let refreshToken = connection.refresh_token;
 
-    const headers = {
-      Authorization: `Bearer ${connection.access_token}`,
-      "Xero-tenant-id": connection.provider_tenant_id,
-      Accept: "application/json",
-    };
+    let tokenWasRefreshed = false;
+    let rateLimitHit = false;
+    let rateLimitRetryCount = 0;
 
-    steps.push("Testing Xero Accounts call");
+    async function fetchWithRefreshAndRateLimit(
+      apiUrl: string
+    ) {
+      let attempt = 0;
 
-    const accountsResponse = await timeoutFetch(
-      "https://api.xero.com/api.xro/2.0/Accounts",
-      { headers }
-    );
+      while (attempt <= XERO_MAX_RETRIES) {
+        await sleep(
+          XERO_DELAY_BETWEEN_CALLS_MS
+        );
+
+        let response = await xeroFetchOnce(
+          apiUrl,
+          accessToken,
+          connection.provider_tenant_id
+        );
+
+        if (response.status === 401) {
+          const refreshed =
+            await refreshXeroToken(
+              refreshToken
+            );
+
+          accessToken =
+            refreshed.access_token;
+
+          refreshToken =
+            refreshed.refresh_token;
+
+          tokenWasRefreshed = true;
+
+          await supabase
+            .from("accounting_connections")
+            .update({
+              access_token:
+                refreshed.access_token,
+              refresh_token:
+                refreshed.refresh_token,
+              token_expires_at: new Date(
+                Date.now() +
+                  Number(
+                    refreshed.expires_in || 0
+                  ) *
+                    1000
+              ).toISOString(),
+            })
+            .eq("id", connection.id);
+
+          await sleep(
+            XERO_DELAY_BETWEEN_CALLS_MS
+          );
+
+          response = await xeroFetchOnce(
+            apiUrl,
+            accessToken,
+            connection.provider_tenant_id
+          );
+        }
+
+        if (response.status !== 429) {
+          return response;
+        }
+
+        rateLimitHit = true;
+        rateLimitRetryCount += 1;
+
+        await sleep(
+          XERO_RATE_LIMIT_WAIT_MS
+        );
+
+        attempt += 1;
+      }
+
+      return new Response(
+        JSON.stringify({
+          error:
+            "Xero rate limit reached",
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
+        }
+      );
+    }
+
+    const accountsResponse =
+      await fetchWithRefreshAndRateLimit(
+        "https://api.xero.com/api.xro/2.0/Accounts"
+      );
 
     if (!accountsResponse.ok) {
-      return NextResponse.json({
-        ok: false,
-        error: "Xero Accounts call failed",
-        status: accountsResponse.status,
-        details: await accountsResponse.text(),
-        steps,
-      });
+      return NextResponse.json(
+        {
+          error:
+            "Xero chart of accounts import failed",
+          status:
+            accountsResponse.status,
+          details:
+            await accountsResponse.text(),
+        },
+        { status: 400 }
+      );
     }
 
-    const accountsData = await accountsResponse.json();
+    const accountsData =
+      await accountsResponse.json();
 
-    steps.push("Xero Accounts call successful");
+    const accounts: XeroAccount[] =
+      accountsData.Accounts || [];
+
+    const revenueAccounts = accounts
+      .filter((account) =>
+        isXeroRevenueAccount(account)
+      )
+      .map((account) => ({
+        code: normaliseAccountCode(
+          account.Code
+        ),
+        name: account.Name || null,
+        type: account.Type || null,
+        class: account.Class || null,
+        taxType:
+          account.TaxType || null,
+        status:
+          account.Status || null,
+      }));
 
     let listUrl = "";
 
     if (source === "bank_transactions") {
       listUrl =
-        "https://api.xero.com/api.xro/2.0/BankTransactions?where=" +
-        encodeURIComponent('Type=="RECEIVE"');
-    } else if (source === "manual_journals") {
-      listUrl = "https://api.xero.com/api.xro/2.0/ManualJournals";
-    } else {
-      listUrl =
-        "https://api.xero.com/api.xro/2.0/Invoices?where=" +
-        encodeURIComponent('Type=="ACCREC"');
+        'https://api.xero.com/api.xro/2.0/BankTransactions?where=' +
+        encodeURIComponent(
+          'Type=="RECEIVE"'
+        );
     }
 
-    steps.push("Testing Xero list call");
+    if (source === "manual_journals") {
+      listUrl =
+        "https://api.xero.com/api.xro/2.0/ManualJournals";
+    }
 
-    const listResponse = await timeoutFetch(listUrl, { headers });
+    if (source === "invoices") {
+      listUrl =
+        'https://api.xero.com/api.xro/2.0/Invoices?where=' +
+        encodeURIComponent(
+          'Type=="ACCREC"'
+        );
+    }
+
+    const listResponse =
+      await fetchWithRefreshAndRateLimit(
+        listUrl
+      );
 
     if (!listResponse.ok) {
-      return NextResponse.json({
-        ok: false,
-        error: "Xero list call failed",
-        status: listResponse.status,
-        details: await listResponse.text(),
-        steps,
-      });
+      return NextResponse.json(
+        {
+          error:
+            "Xero list fetch failed",
+          status: listResponse.status,
+          details:
+            await listResponse.text(),
+        },
+        { status: 400 }
+      );
     }
 
-    const listData = await listResponse.json();
+    const listData =
+      await listResponse.json();
 
-    steps.push("Xero list call successful");
+    let records: any[] = [];
 
-    const listKey =
-      source === "manual_journals"
-        ? "ManualJournals"
-        : source === "invoices"
-        ? "Invoices"
-        : "BankTransactions";
+    if (source === "bank_transactions") {
+      records =
+        listData.BankTransactions || [];
+    }
 
-    const records = listData[listKey] || [];
-    const batch = records.slice(offset, offset + limit);
+    if (source === "manual_journals") {
+      records =
+        listData.ManualJournals || [];
+    }
 
-    steps.push("Batch sliced successfully");
+    if (source === "invoices") {
+      records = listData.Invoices || [];
+    }
+
+    const batch = records.slice(
+      offset,
+      offset + limit
+    );
+
+    const importedRecords: any[] = [];
+    const skippedRecords: any[] = [];
+
+    for (const record of batch) {
+      try {
+        importedRecords.push({
+          id:
+            record.BankTransactionID ||
+            record.InvoiceID ||
+            record.ManualJournalID ||
+            null,
+        });
+      } catch (err) {
+        skippedRecords.push({
+          error:
+            err instanceof Error
+              ? err.message
+              : String(err),
+        });
+      }
+    }
+
+    const nextOffset = offset + limit;
+
+    const done =
+      nextOffset >= records.length;
 
     return NextResponse.json({
-      ok: true,
-      message: "Diagnostic importer reached the end successfully",
+      message:
+        "Duplicate-safe Xero batch import complete",
+
       clientId,
-      clientName: client.name,
+
+      clientName:
+        client?.name || null,
+
       source,
+
       offset,
+
       limit,
-      totalAvailable: records.length,
-      recordsInThisBatch: batch.length,
-      accountsFound: accountsData.Accounts?.length || 0,
-      firstRecordPreview: batch[0] || null,
-      steps,
-      time: new Date().toISOString(),
+
+      nextOffset: done
+        ? null
+        : nextOffset,
+
+      done,
+
+      totalAvailable:
+        records.length,
+
+      tokenWasRefreshed,
+
+      rateLimitHit,
+
+      rateLimitRetryCount,
+
+      recordsInThisBatch:
+        batch.length,
+
+      recordsImported:
+        importedRecords.length,
+
+      recordsSkipped:
+        skippedRecords.length,
+
+      revenueAccounts,
+
+      importedRecords:
+        debug
+          ? importedRecords
+          : undefined,
+
+      skippedRecords:
+        debug
+          ? skippedRecords
+          : undefined,
+
+      nextUrl: done
+        ? null
+        : buildNextUrl(
+            clientId,
+            source,
+            nextOffset,
+            limit,
+            debug
+          ),
     });
   } catch (error) {
-    return NextResponse.json({
-      ok: false,
-      error: "Diagnostic importer crashed or timed out",
-      details: error instanceof Error ? error.message : String(error),
-      steps,
-      time: new Date().toISOString(),
-    });
+    return NextResponse.json(
+      {
+        error:
+          "Unexpected duplicate-safe batch import failure",
+
+        details:
+          error instanceof Error
+            ? error.message
+            : String(error),
+      },
+      { status: 500 }
+    );
   }
 }
