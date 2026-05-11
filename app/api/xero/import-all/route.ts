@@ -28,7 +28,7 @@ function buildImportUrl(params: {
   limit: number;
   debug: boolean;
 }) {
-  const debugPart = params.debug ?;
+  const debugPart = params.debug ? "&debug=true" : "";
 
   return `${APP_URL}/api/xero/import?clientId=${params.clientId}&source=${params.source}&offset=${params.offset}&limit=${params.limit}${debugPart}`;
 }
@@ -65,10 +65,7 @@ export async function GET(request: Request) {
     const debug = url.searchParams.get("debug") === "true";
 
     if (!clientId) {
-      return NextResponse.json(
-        { error: "Missing clientId" },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
     }
 
     let currentOffset = startOffset;
@@ -92,15 +89,16 @@ export async function GET(request: Request) {
         cache: "no-store",
       });
 
-      let result: any;
+      let result: any = null;
+      const responseText = await response.text();
 
       try {
-        result = await response.json();
+        result = JSON.parse(responseText);
       } catch {
         result = {
           error: "Importer response was not valid JSON",
           status: response.status,
-          text: await response.text(),
+          text: responseText.slice(0, 1000),
         };
       }
 
