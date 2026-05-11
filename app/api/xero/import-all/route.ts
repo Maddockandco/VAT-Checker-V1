@@ -6,7 +6,7 @@ const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
 const DEFAULT_LIMIT = 5;
-const MAX_BATCHES_PER_RUN = 8;
+const MAX_BATCHES_PER_RUN = 5;
 const DELAY_BETWEEN_BATCHES_MS = 1000;
 
 type SourceType = "invoices" | "bank_transactions" | "manual_journals";
