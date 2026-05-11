@@ -28,7 +28,7 @@ function buildImportUrl(params: {
   limit: number;
   debug: boolean;
 }) {
-  const debugPart = params.debug ? "&debug=true" : "";
+  const debugPart = params.debug ?;
 
   return `${APP_URL}/api/xero/import?clientId=${params.clientId}&source=${params.source}&offset=${params.offset}&limit=${params.limit}${debugPart}`;
 }
