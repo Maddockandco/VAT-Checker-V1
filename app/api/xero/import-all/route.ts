@@ -5,8 +5,8 @@ export const dynamic = "force-dynamic";
 const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
-const DEFAULT_LIMIT = 5;
-const MAX_BATCHES_PER_RUN = 3;
+const DEFAULT_LIMIT = 100;
+const MAX_BATCHES_PER_RUN = 1;
 const DELAY_BETWEEN_BATCHES_MS = 1000;
 
 type SourceType = "invoices" | "bank_transactions" | "manual_journals";
