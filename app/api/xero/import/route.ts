@@ -7,10 +7,11 @@ export const dynamic = "force-dynamic";
 const DEFAULT_LIMIT = 5;
 const MAX_LIMIT = 5;
 
-type SourceType =
-  | "invoices"
-  | "bank_transactions"
-  | "manual_journals";
+const XERO_DELAY_BETWEEN_CALLS_MS = 1200;
+const XERO_429_FALLBACK_WAIT_MS = 15000;
+const XERO_MAX_RETRIES = 5;
+
+type SourceType = "invoices" | "bank_transactions" | "manual_journals";
 
 type XeroAccount = {
   Code?: string;
@@ -19,6 +20,10 @@ type XeroAccount = {
   Status?: string;
   Class?: string;
 };
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function safeNumber(value: unknown) {
   const parsed = Number(value || 0);
@@ -33,18 +38,10 @@ function parseXeroDate(value: string | undefined): Date | null {
   if (!value) return null;
 
   const match = value.match(/\/Date\((\d+)/);
-
-  if (match?.[1]) {
-    return new Date(Number(match[1]));
-  }
+  if (match?.[1]) return new Date(Number(match[1]));
 
   const parsed = new Date(value);
-
-  if (Number.isNaN(parsed.getTime())) {
-    return null;
-  }
-
-  return parsed;
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
 
 function isoDate(date: Date) {
@@ -52,14 +49,8 @@ function isoDate(date: Date) {
 }
 
 function sourceFromParam(value: string | null): SourceType {
-  if (value === "bank_transactions") {
-    return "bank_transactions";
-  }
-
-  if (value === "manual_journals") {
-    return "manual_journals";
-  }
-
+  if (value === "bank_transactions") return "bank_transactions";
+  if (value === "manual_journals") return "manual_journals";
   return "invoices";
 }
 
@@ -70,9 +61,7 @@ function isRevenueAccount(account: XeroAccount | undefined) {
   const accountClass = String(account.Class || "").toUpperCase();
   const status = String(account.Status || "").toUpperCase();
 
-  if (status === "ARCHIVED") {
-    return false;
-  }
+  if (status === "ARCHIVED") return false;
 
   return (
     type === "REVENUE" ||
@@ -83,33 +72,29 @@ function isRevenueAccount(account: XeroAccount | undefined) {
 }
 
 async function refreshXeroToken(refreshToken: string) {
-  const clientId = process.env.XERO_CLIENT_ID!;
-  const clientSecret = process.env.XERO_CLIENT_SECRET!;
+  const xeroClientId = process.env.XERO_CLIENT_ID;
+  const xeroClientSecret = process.env.XERO_CLIENT_SECRET;
 
-  const response = await fetch(
-    "https://identity.xero.com/connect/token",
-    {
-      method: "POST",
-      headers: {
-        Authorization:
-          "Basic " +
-          Buffer.from(
-            `${clientId}:${clientSecret}`
-          ).toString("base64"),
-        "Content-Type":
-          "application/x-www-form-urlencoded",
-      },
-      body: new URLSearchParams({
-        grant_type: "refresh_token",
-        refresh_token: refreshToken,
-      }),
-    }
-  );
+  if (!xeroClientId || !xeroClientSecret) {
+    throw new Error("Missing XERO_CLIENT_ID or XERO_CLIENT_SECRET");
+  }
+
+  const response = await fetch("https://identity.xero.com/connect/token", {
+    method: "POST",
+    headers: {
+      Authorization:
+        "Basic " +
+        Buffer.from(`${xeroClientId}:${xeroClientSecret}`).toString("base64"),
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
 
   if (!response.ok) {
-    throw new Error(
-      `Token refresh failed: ${await response.text()}`
-    );
+    throw new Error(`Token refresh failed: ${await response.text()}`);
   }
 
   return response.json();
@@ -120,45 +105,35 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
 
     const clientId = url.searchParams.get("clientId");
+    const source = sourceFromParam(url.searchParams.get("source"));
 
-    const source = sourceFromParam(
-      url.searchParams.get("source")
-    );
-
-    const offset = Math.max(
-      Number(url.searchParams.get("offset") || 0),
-      0
-    );
+    const offset = Math.max(Number(url.searchParams.get("offset") || 0), 0);
 
     const limit = Math.min(
-      Math.max(
-        Number(
-          url.searchParams.get("limit") || DEFAULT_LIMIT
-        ),
-        1
-      ),
+      Math.max(Number(url.searchParams.get("limit") || DEFAULT_LIMIT), 1),
       MAX_LIMIT
     );
 
-    const debug =
-      url.searchParams.get("debug") === "true";
+    const debug = url.searchParams.get("debug") === "true";
 
     if (!clientId) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: "Missing clientId",
-        },
-        {
-          status: 400,
-        }
+        { ok: false, error: "Missing clientId" },
+        { status: 400 }
       );
     }
 
-    const supabase = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+    if (!supabaseUrl || !supabaseServiceRoleKey) {
+      return NextResponse.json(
+        { ok: false, error: "Missing Supabase environment variables" },
+        { status: 500 }
+      );
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
 
     const { data: client } = await supabase
       .from("clients")
@@ -166,75 +141,107 @@ export async function GET(request: Request) {
       .eq("id", clientId)
       .single();
 
-    const { data: connection } = await supabase
+    const { data: connection, error: connectionError } = await supabase
       .from("accounting_connections")
       .select("*")
       .eq("client_id", clientId)
       .eq("provider", "xero")
-      .order("connected_at", {
-        ascending: false,
-      })
+      .order("connected_at", { ascending: false })
       .limit(1)
       .single();
 
-    if (!connection) {
+    if (connectionError || !connection) {
       return NextResponse.json(
         {
           ok: false,
           error: "No Xero connection found",
+          details: connectionError?.message || null,
         },
-        {
-          status: 404,
-        }
+        { status: 404 }
       );
     }
 
     let accessToken = connection.access_token;
     let refreshToken = connection.refresh_token;
+    let tokenWasRefreshed = false;
+    let rateLimitHit = false;
+    let rateLimitRetryCount = 0;
 
     async function xeroFetch(apiUrl: string) {
-      let response = await fetch(apiUrl, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Xero-tenant-id":
-            connection.provider_tenant_id,
-          Accept: "application/json",
-        },
-      });
+      let attempt = 0;
 
-      if (response.status === 401) {
-        const refreshed =
-          await refreshXeroToken(refreshToken);
+      while (attempt <= XERO_MAX_RETRIES) {
+        await sleep(XERO_DELAY_BETWEEN_CALLS_MS);
 
-        accessToken = refreshed.access_token;
-        refreshToken = refreshed.refresh_token;
-
-        await supabase
-          .from("accounting_connections")
-          .update({
-            access_token:
-              refreshed.access_token,
-            refresh_token:
-              refreshed.refresh_token,
-            token_expires_at:
-              new Date(
-                Date.now() +
-                  refreshed.expires_in * 1000
-              ).toISOString(),
-          })
-          .eq("id", connection.id);
-
-        response = await fetch(apiUrl, {
+        let response = await fetch(apiUrl, {
           headers: {
             Authorization: `Bearer ${accessToken}`,
-            "Xero-tenant-id":
-              connection.provider_tenant_id,
+            "Xero-tenant-id": connection.provider_tenant_id,
             Accept: "application/json",
           },
         });
+
+        if (response.status === 401) {
+          const refreshed = await refreshXeroToken(refreshToken);
+
+          accessToken = refreshed.access_token;
+          refreshToken = refreshed.refresh_token;
+          tokenWasRefreshed = true;
+
+          await supabase
+            .from("accounting_connections")
+            .update({
+              access_token: refreshed.access_token,
+              refresh_token: refreshed.refresh_token,
+              token_expires_at: new Date(
+                Date.now() + Number(refreshed.expires_in || 0) * 1000
+              ).toISOString(),
+            })
+            .eq("id", connection.id);
+
+          await sleep(XERO_DELAY_BETWEEN_CALLS_MS);
+
+          response = await fetch(apiUrl, {
+            headers: {
+              Authorization: `Bearer ${accessToken}`,
+              "Xero-tenant-id": connection.provider_tenant_id,
+              Accept: "application/json",
+            },
+          });
+        }
+
+        if (response.status !== 429) {
+          return response;
+        }
+
+        rateLimitHit = true;
+        rateLimitRetryCount += 1;
+
+        const retryAfterHeader = response.headers.get("Retry-After");
+        const retryAfterSeconds = Number(retryAfterHeader || 0);
+
+        const waitMs =
+          Number.isFinite(retryAfterSeconds) && retryAfterSeconds > 0
+            ? retryAfterSeconds * 1000
+            : XERO_429_FALLBACK_WAIT_MS;
+
+        await sleep(waitMs);
+        attempt += 1;
       }
 
-      return response;
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error: "Xero rate limit reached after retries",
+          source,
+          offset,
+          limit,
+        }),
+        {
+          status: 429,
+          headers: { "Content-Type": "application/json" },
+        }
+      );
     }
 
     const accountsResponse = await xeroFetch(
@@ -247,45 +254,28 @@ export async function GET(request: Request) {
           ok: false,
           error: "Xero Accounts call failed",
           status: accountsResponse.status,
-          details:
-            await accountsResponse.text(),
+          details: await accountsResponse.text(),
+          tokenWasRefreshed,
+          rateLimitHit,
+          rateLimitRetryCount,
         },
-        {
-          status: 400,
-        }
+        { status: accountsResponse.status === 429 ? 429 : 400 }
       );
     }
 
-    const accountsJson =
-      await accountsResponse.json();
+    const accountsJson = await accountsResponse.json();
+    const accounts: XeroAccount[] = accountsJson.Accounts || [];
 
-    const accounts: XeroAccount[] =
-      accountsJson.Accounts || [];
-
-    const accountMap = new Map<
-      string,
-      XeroAccount
-    >();
+    const accountMap = new Map<string, XeroAccount>();
 
     for (const account of accounts) {
-      const code = normaliseAccountCode(
-        account.Code
-      );
-
-      if (code) {
-        accountMap.set(code, account);
-      }
+      const code = normaliseAccountCode(account.Code);
+      if (code) accountMap.set(code, account);
     }
 
-    function lineIsRevenue(
-      accountCode: string | undefined
-    ) {
-      const code =
-        normaliseAccountCode(accountCode);
-
-      const account = accountMap.get(code);
-
-      return isRevenueAccount(account);
+    function lineIsRevenue(accountCode: string | undefined) {
+      const code = normaliseAccountCode(accountCode);
+      return isRevenueAccount(accountMap.get(code));
     }
 
     let listUrl = "";
@@ -294,44 +284,27 @@ export async function GET(request: Request) {
     let detailBase = "";
 
     if (source === "bank_transactions") {
-      listUrl =
-        "https://api.xero.com/api.xro/2.0/BankTransactions";
-
+      listUrl = "https://api.xero.com/api.xro/2.0/BankTransactions";
       listKey = "BankTransactions";
-
       detailIdKey = "BankTransactionID";
-
-      detailBase =
-        "https://api.xero.com/api.xro/2.0/BankTransactions";
+      detailBase = "https://api.xero.com/api.xro/2.0/BankTransactions";
     }
 
     if (source === "invoices") {
-      listUrl =
-        "https://api.xero.com/api.xro/2.0/Invoices";
-
+      listUrl = "https://api.xero.com/api.xro/2.0/Invoices";
       listKey = "Invoices";
-
       detailIdKey = "InvoiceID";
-
-      detailBase =
-        "https://api.xero.com/api.xro/2.0/Invoices";
+      detailBase = "https://api.xero.com/api.xro/2.0/Invoices";
     }
 
     if (source === "manual_journals") {
-      listUrl =
-        "https://api.xero.com/api.xro/2.0/ManualJournals";
-
+      listUrl = "https://api.xero.com/api.xro/2.0/ManualJournals";
       listKey = "ManualJournals";
-
       detailIdKey = "ManualJournalID";
-
-      detailBase =
-        "https://api.xero.com/api.xro/2.0/ManualJournals";
+      detailBase = "https://api.xero.com/api.xro/2.0/ManualJournals";
     }
 
-    const listResponse = await xeroFetch(
-      listUrl
-    );
+    const listResponse = await xeroFetch(listUrl);
 
     if (!listResponse.ok) {
       return NextResponse.json(
@@ -339,188 +312,163 @@ export async function GET(request: Request) {
           ok: false,
           error: "Xero list call failed",
           status: listResponse.status,
-          details:
-            await listResponse.text(),
+          details: await listResponse.text(),
+          tokenWasRefreshed,
+          rateLimitHit,
+          rateLimitRetryCount,
         },
-        {
-          status: 400,
-        }
+        { status: listResponse.status === 429 ? 429 : 400 }
       );
     }
 
-    const listJson =
-      await listResponse.json();
-
+    const listJson = await listResponse.json();
     const records = listJson[listKey] || [];
-
-    const batch = records.slice(
-      offset,
-      offset + limit
-    );
+    const batch = records.slice(offset, offset + limit);
 
     let recordsImported = 0;
     let recordsSkipped = 0;
     let linesImported = 0;
+    let linesUpserted = 0;
 
     const importedRecords: any[] = [];
     const skippedRecords: any[] = [];
     const debugLines: any[] = [];
+    const importedLineRows: any[] = [];
 
     for (const summary of batch) {
-      const recordId =
-        summary?.[detailIdKey];
+      const recordId = summary?.[detailIdKey];
 
       if (!recordId) {
         recordsSkipped += 1;
+        skippedRecords.push({ id: null, reason: "missing_record_id" });
         continue;
       }
 
-      const detailResponse =
-        await xeroFetch(
-          `${detailBase}/${recordId}`
-        );
+      const detailResponse = await xeroFetch(`${detailBase}/${recordId}`);
 
       if (!detailResponse.ok) {
         recordsSkipped += 1;
+        skippedRecords.push({
+          id: recordId,
+          reason: `detail_fetch_failed_${detailResponse.status}`,
+        });
         continue;
       }
 
-      const detailJson =
-        await detailResponse.json();
-
-      const record =
-        detailJson[listKey]?.[0];
+      const detailJson = await detailResponse.json();
+      const record = detailJson[listKey]?.[0];
 
       if (!record) {
         recordsSkipped += 1;
+        skippedRecords.push({ id: recordId, reason: "missing_detail_record" });
         continue;
       }
 
-      const lineItems =
-        record.LineItems ||
-        record.JournalLines ||
-        [];
+      const lineItems = record.LineItems || record.JournalLines || [];
 
       let importedThisRecord = 0;
 
       for (const [lineIndex, line] of lineItems.entries()) {
-        const accountCode =
-          normaliseAccountCode(
-            line.AccountCode
-          );
+        const accountCode = normaliseAccountCode(line.AccountCode);
+        const revenueMatched = lineIsRevenue(accountCode);
+        const amount = Math.abs(safeNumber(line.LineAmount));
 
-        const revenueMatched =
-          lineIsRevenue(accountCode);
-
-        if (!revenueMatched) {
-          continue;
+        if (debug) {
+          debugLines.push({
+            recordId,
+            accountCode,
+            accountName: accountMap.get(accountCode)?.Name || null,
+            amount,
+            taxType: line.TaxType || null,
+            revenueMatched,
+          });
         }
 
-        const amount = Math.abs(
-          safeNumber(line.LineAmount)
-        );
+        if (!revenueMatched || amount === 0) continue;
 
-        if (amount === 0) {
-          continue;
-        }
-
-        const date =
-          parseXeroDate(
-            record.Date ||
-              record.DateString
-          ) || new Date();
+        const date = parseXeroDate(record.Date || record.DateString) || new Date();
 
         const sourceLineKey = `${source}_${recordId}_${lineIndex}_${accountCode}`;
 
-        const upsertPayload = {
+        importedLineRows.push({
           client_id: clientId,
           source,
           source_record_id: recordId,
           source_line_key: sourceLineKey,
           transaction_date: isoDate(date),
           account_code: accountCode,
-          account_name:
-            accountMap.get(accountCode)
-              ?.Name || null,
-          description:
-            line.Description || null,
-          tax_type:
-            line.TaxType || null,
-          amount,
-          updated_at:
-            new Date().toISOString(),
-        };
+          account_name: accountMap.get(accountCode)?.Name || null,
+          description: line.Description || null,
+          tax_type: line.TaxType || null,
+          amount: Number(amount.toFixed(2)),
+          updated_at: new Date().toISOString(),
+        });
 
-        const { error } = await supabase
-          .from("xero_imported_lines")
-          .upsert(upsertPayload, {
-            onConflict:
-              "client_id,source_line_key",
-          });
-
-        if (!error) {
-          linesImported += 1;
-          importedThisRecord += 1;
-        }
-
-        if (debug) {
-          debugLines.push({
-            recordId,
-            accountCode,
-            amount,
-            revenueMatched,
-          });
-        }
+        linesImported += 1;
+        importedThisRecord += 1;
       }
 
       if (importedThisRecord > 0) {
         recordsImported += 1;
-
         importedRecords.push({
           id: recordId,
-          importedLines:
-            importedThisRecord,
+          importedLines: importedThisRecord,
         });
       } else {
         recordsSkipped += 1;
-
         skippedRecords.push({
           id: recordId,
-          reason:
-            "no_revenue_lines_found",
+          reason: "no_revenue_lines_found",
         });
       }
     }
 
-    const nextOffset = offset + limit;
+    if (importedLineRows.length > 0) {
+      const { error: upsertError } = await supabase
+        .from("xero_imported_lines")
+        .upsert(importedLineRows, {
+          onConflict: "client_id,source_line_key",
+        });
 
-    const done =
-      nextOffset >= records.length;
+      if (upsertError) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: "Could not save imported Xero lines",
+            details: upsertError.message,
+          },
+          { status: 500 }
+        );
+      }
+
+      linesUpserted = importedLineRows.length;
+    }
+
+    const nextOffset = offset + limit;
+    const done = nextOffset >= records.length;
 
     return NextResponse.json({
       ok: true,
-      message:
-        "Production Xero batch import complete",
+      message: "Lightweight Xero batch import complete",
       clientId,
       clientName: client?.name || null,
       source,
       offset,
       limit,
-      nextOffset: done
-        ? null
-        : nextOffset,
+      nextOffset: done ? null : nextOffset,
       done,
       totalAvailable: records.length,
-      recordsInThisBatch:
-        batch.length,
+      tokenWasRefreshed,
+      rateLimitHit,
+      rateLimitRetryCount,
+      recordsInThisBatch: batch.length,
       recordsImported,
       recordsSkipped,
       linesImported,
+      linesUpserted,
       importedRecords,
       skippedRecords,
-      debugLines: debug
-        ? debugLines
-        : undefined,
+      debugLines: debug ? debugLines : undefined,
       nextUrl: done
         ? null
         : `/api/xero/import?clientId=${clientId}&source=${source}&offset=${nextOffset}&limit=${limit}&debug=${debug}`,
@@ -529,14 +477,10 @@ export async function GET(request: Request) {
     return NextResponse.json(
       {
         ok: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : String(error),
+        error: "Unexpected lightweight Xero import failure",
+        details: error instanceof Error ? error.message : String(error),
       },
-      {
-        status: 500,
-      }
+      { status: 500 }
     );
   }
 }
