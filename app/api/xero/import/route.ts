@@ -239,11 +239,22 @@ export async function GET(request: Request) {
     let detailBase = "";
 
     if (source === "bank_transactions") {
-      listUrl = "https://api.xero.com/api.xro/2.0/BankTransactions";
-      listKey = "BankTransactions";
-      detailIdKey = "BankTransactionID";
-      detailBase = "https://api.xero.com/api.xro/2.0/BankTransactions";
-    }
+  const fromDate = "2025-05-01";
+  const toDate = "2026-04-30";
+
+  listUrl =
+    "https://api.xero.com/api.xro/2.0/BankTransactions" +
+    `?where=${encodeURIComponent(
+      `Type=="RECEIVE"&&Date>=DateTime(2025,5,1)&&Date<=DateTime(2026,4,30)`
+    )}`;
+
+  listKey = "BankTransactions";
+
+  detailIdKey = "BankTransactionID";
+
+  detailBase =
+    "https://api.xero.com/api.xro/2.0/BankTransactions";
+}
 
     if (source === "invoices") {
       listUrl = "https://api.xero.com/api.xro/2.0/Invoices";
