@@ -5,7 +5,7 @@ export const dynamic = "force-dynamic";
 const APP_URL =
   process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
-const DEFAULT_LIMIT = 100;
+const DEFAULT_LIMIT = 50;
 const MAX_BATCHES_PER_RUN = 1;
 const DELAY_BETWEEN_BATCHES_MS = 1000;
 
