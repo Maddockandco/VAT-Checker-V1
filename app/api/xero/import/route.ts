@@ -20,13 +20,6 @@ type XeroAccount = {
   Class?: string;
 };
 
-type XeroLineItem = {
-  Description?: string;
-  LineAmount?: number;
-  TaxType?: string;
-  AccountCode?: string;
-};
-
 function safeNumber(value: unknown) {
   const parsed = Number(value || 0);
   return Number.isFinite(parsed) ? parsed : 0;
@@ -87,6 +80,39 @@ function isRevenueAccount(account: XeroAccount | undefined) {
     type === "OTHERINCOME" ||
     accountClass === "REVENUE"
   );
+}
+
+async function refreshXeroToken(refreshToken: string) {
+  const clientId = process.env.XERO_CLIENT_ID!;
+  const clientSecret = process.env.XERO_CLIENT_SECRET!;
+
+  const response = await fetch(
+    "https://identity.xero.com/connect/token",
+    {
+      method: "POST",
+      headers: {
+        Authorization:
+          "Basic " +
+          Buffer.from(
+            `${clientId}:${clientSecret}`
+          ).toString("base64"),
+        "Content-Type":
+          "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: refreshToken,
+      }),
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(
+      `Token refresh failed: ${await response.text()}`
+    );
+  }
+
+  return response.json();
 }
 
 export async function GET(request: Request) {
@@ -164,9 +190,10 @@ export async function GET(request: Request) {
     }
 
     let accessToken = connection.access_token;
+    let refreshToken = connection.refresh_token;
 
     async function xeroFetch(apiUrl: string) {
-      return fetch(apiUrl, {
+      let response = await fetch(apiUrl, {
         headers: {
           Authorization: `Bearer ${accessToken}`,
           "Xero-tenant-id":
@@ -174,6 +201,40 @@ export async function GET(request: Request) {
           Accept: "application/json",
         },
       });
+
+      if (response.status === 401) {
+        const refreshed =
+          await refreshXeroToken(refreshToken);
+
+        accessToken = refreshed.access_token;
+        refreshToken = refreshed.refresh_token;
+
+        await supabase
+          .from("accounting_connections")
+          .update({
+            access_token:
+              refreshed.access_token,
+            refresh_token:
+              refreshed.refresh_token,
+            token_expires_at:
+              new Date(
+                Date.now() +
+                  refreshed.expires_in * 1000
+              ).toISOString(),
+          })
+          .eq("id", connection.id);
+
+        response = await fetch(apiUrl, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Xero-tenant-id":
+              connection.provider_tenant_id,
+            Accept: "application/json",
+          },
+        });
+      }
+
+      return response;
     }
 
     const accountsResponse = await xeroFetch(
@@ -186,7 +247,8 @@ export async function GET(request: Request) {
           ok: false,
           error: "Xero Accounts call failed",
           status: accountsResponse.status,
-          details: await accountsResponse.text(),
+          details:
+            await accountsResponse.text(),
         },
         {
           status: 400,
@@ -267,7 +329,9 @@ export async function GET(request: Request) {
         "https://api.xero.com/api.xro/2.0/ManualJournals";
     }
 
-    const listResponse = await xeroFetch(listUrl);
+    const listResponse = await xeroFetch(
+      listUrl
+    );
 
     if (!listResponse.ok) {
       return NextResponse.json(
@@ -275,7 +339,8 @@ export async function GET(request: Request) {
           ok: false,
           error: "Xero list call failed",
           status: listResponse.status,
-          details: await listResponse.text(),
+          details:
+            await listResponse.text(),
         },
         {
           status: 400,
@@ -283,7 +348,8 @@ export async function GET(request: Request) {
       );
     }
 
-    const listJson = await listResponse.json();
+    const listJson =
+      await listResponse.json();
 
     const records = listJson[listKey] || [];
 
@@ -309,9 +375,10 @@ export async function GET(request: Request) {
         continue;
       }
 
-      const detailResponse = await xeroFetch(
-        `${detailBase}/${recordId}`
-      );
+      const detailResponse =
+        await xeroFetch(
+          `${detailBase}/${recordId}`
+        );
 
       if (!detailResponse.ok) {
         recordsSkipped += 1;
