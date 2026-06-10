@@ -390,21 +390,80 @@ export async function GET(request: Request) {
     }
 
     // ── 3. MANUAL JOURNALS ────────────────────────────────────
-    // Manual journals are intentionally skipped for now.
-    //
-    // Why: Xero manual journals include intercompany recharges, balance
-    // corrections, wage accruals and other non-income entries that also
-    // post to income account codes. Including them without additional
-    // filtering causes gross overstatement of turnover.
-    //
-    // The correct approach (to be built in a future phase) is to only
-    // include journals where:
-    //   - The narration explicitly indicates a sales correction
-    //   - The journal has been tagged with a specific tracking category
-    //   - The accountant has manually approved the journal for inclusion
-    //
-    // For now, invoices + bank transactions give an accurate turnover
-    // figure that matches the Xero P&L report.
+    // Debug confirmed: for this Xero organisation, EPOS sales are recorded
+    // via manual journals crediting income accounts (negative LineAmount).
+    // We include only:
+    //   - Lines where LineAmount is NEGATIVE (credit = income posted)
+    //   - Lines where the AccountCode matches a mapped income account
+    //   - We explicitly exclude bank/clearing accounts (non-income codes)
+    // This matches the Xero P&L which picks up the same journal credits.
+
+    let journalPage = 1;
+    let journalsDone = false;
+
+    while (!journalsDone) {
+      const journalsRes = await xeroGet(
+        `https://api.xero.com/api.xro/2.0/ManualJournals` +
+          `?where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})` +
+          `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
+          `&page=${journalPage}`
+      );
+
+      if (!journalsRes.ok) { journalsDone = true; break; }
+
+      const journalsJson = await journalsRes.json();
+      const journals = journalsJson.ManualJournals || [];
+
+      if (journals.length === 0) { journalsDone = true; break; }
+
+      for (const journal of journals) {
+        totalRecordsProcessed++;
+        const date = parseXeroDate(journal.Date || journal.DateString) || new Date();
+        const lines = journal.JournalLines || [];
+
+        for (const [i, line] of lines.entries()) {
+          const code = String(line.AccountCode || "").trim();
+
+          // Only process lines that match a mapped income account
+          const classification = accountMap.get(code);
+          if (!classification || classification === "excluded") {
+            totalLinesSkipped++;
+            continue;
+          }
+
+          const lineAmount = safeNumber(line.LineAmount);
+
+          // Only include CREDIT lines (negative = income being posted)
+          // Positive lines on income accounts are reversals/corrections —
+          // we skip those to avoid double counting
+          if (lineAmount >= 0) {
+            totalLinesSkipped++;
+            continue;
+          }
+
+          const absAmount = Math.abs(lineAmount);
+          if (absAmount === 0) continue;
+
+          importedLines.push({
+            client_id: clientId,
+            source: "manual_journals",
+            source_record_id: journal.ManualJournalID,
+            source_line_key: `journal_${journal.ManualJournalID}_${i}_${code}`,
+            transaction_date: isoDate(date),
+            account_code: code,
+            account_name: null,
+            description: line.Description || journal.Narration || null,
+            tax_type: line.TaxType || null,
+            vat_classification: classification,
+            amount: Number(absAmount.toFixed(2)),
+            updated_at: new Date().toISOString(),
+          });
+          totalLinesImported++;
+        }
+      }
+
+      if (journals.length < 100) { journalsDone = true; } else { journalPage++; }
+    }
 
     // Save all imported lines
     if (importedLines.length > 0) {
