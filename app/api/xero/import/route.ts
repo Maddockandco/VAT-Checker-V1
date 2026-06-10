@@ -210,16 +210,34 @@ export async function GET(request: Request) {
     let totalLinesSkipped = 0;
 
     // ── 1. INVOICES ────────────────────────────────────────────
-    const invoicesRes = await xeroGet(
-      `https://api.xero.com/api.xro/2.0/Invoices?where=Type%3D%3D"ACCREC"` +
-        `%26%26Date>%3DDateTime(${fromDate.getFullYear()},${fromDate.getMonth() + 1},${fromDate.getDate()})` +
-        `%26%26Date<%3DDateTime(${toDate.getFullYear()},${toDate.getMonth() + 1},${toDate.getDate()})` +
-        `&summaryOnly=false`
-    );
+    // Xero requires fetching invoices in pages of 100 max with
+    // page parameter to get full line item detail.
+    // summaryOnly=false alone is not enough — we must paginate.
+    let invoicePage = 1;
+    let invoicesDone = false;
 
-    if (invoicesRes.ok) {
+    while (!invoicesDone) {
+      const invoicesRes = await xeroGet(
+        `https://api.xero.com/api.xro/2.0/Invoices` +
+          `?Type=ACCREC` +
+          `&where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
+          `&page=${invoicePage}` +
+          `&summaryOnly=false`
+      );
+
+      if (!invoicesRes.ok) {
+        // Don't fail the whole import — just stop fetching invoices
+        invoicesDone = true;
+        break;
+      }
+
       const invoicesJson = await invoicesRes.json();
       const invoices = invoicesJson.Invoices || [];
+
+      if (invoices.length === 0) {
+        invoicesDone = true;
+        break;
+      }
 
       for (const invoice of invoices) {
         totalRecordsProcessed++;
@@ -255,19 +273,34 @@ export async function GET(request: Request) {
           totalLinesImported++;
         }
       }
+
+      // Xero returns max 100 per page — if less than 100 we're done
+      if (invoices.length < 100) {
+        invoicesDone = true;
+      } else {
+        invoicePage++;
+      }
     }
 
     // ── 2. BANK TRANSACTIONS (receipts only) ──────────────────
-    const bankRes = await xeroGet(
-      `https://api.xero.com/api.xro/2.0/BankTransactions` +
-        `?where=Type%3D%3D"RECEIVE"` +
-        `%26%26Date>%3DDateTime(${fromDate.getFullYear()},${fromDate.getMonth() + 1},${fromDate.getDate()})` +
-        `%26%26Date<%3DDateTime(${toDate.getFullYear()},${toDate.getMonth() + 1},${toDate.getDate()})`
-    );
+    let bankPage = 1;
+    let bankDone = false;
 
-    if (bankRes.ok) {
+    while (!bankDone) {
+      const bankRes = await xeroGet(
+        `https://api.xero.com/api.xro/2.0/BankTransactions` +
+          `?where=Type%3D%3D%22RECEIVE%22` +
+          `%26%26Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})` +
+          `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
+          `&page=${bankPage}`
+      );
+
+      if (!bankRes.ok) { bankDone = true; break; }
+
       const bankJson = await bankRes.json();
       const transactions = bankJson.BankTransactions || [];
+
+      if (transactions.length === 0) { bankDone = true; break; }
 
       for (const txn of transactions) {
         totalRecordsProcessed++;
@@ -303,13 +336,16 @@ export async function GET(request: Request) {
           totalLinesImported++;
         }
       }
+
+      if (transactions.length < 100) { bankDone = true; } else { bankPage++; }
     }
 
     // ── 3. MANUAL JOURNALS ────────────────────────────────────
+    // Journals include full line detail by default — no pagination needed
     const journalsRes = await xeroGet(
       `https://api.xero.com/api.xro/2.0/ManualJournals` +
-        `?where=Date>%3DDateTime(${fromDate.getFullYear()},${fromDate.getMonth() + 1},${fromDate.getDate()})` +
-        `%26%26Date<%3DDateTime(${toDate.getFullYear()},${toDate.getMonth() + 1},${toDate.getDate()})`
+        `?where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})` +
+        `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})`
     );
 
     if (journalsRes.ok) {
@@ -498,6 +534,8 @@ export async function GET(request: Request) {
       clientId,
       clientName: client.name,
       importWindow: { from: fromIso, to: toIso },
+      accountMappingsLoaded: accountMap.size,
+      accountCodesInMap: Array.from(accountMap.keys()),
       totalRecordsProcessed,
       totalLinesImported,
       totalLinesSkipped,
