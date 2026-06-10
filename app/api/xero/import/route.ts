@@ -1,10 +1,10 @@
 // app/api/xero/import/route.ts
 // Imports transactions from Xero using confirmed account mappings
-// Handles invoices, bank transactions AND manual journals
+// Handles invoices and manual journals
 
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
-import { isTaxableTurnover, type VatClassification } from "@/lib/hmrc-vat-rules";
+import { type VatClassification } from "@/lib/hmrc-vat-rules";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -76,7 +76,6 @@ export async function GET(request: Request) {
       process.env.SUPABASE_SERVICE_ROLE_KEY!
     );
 
-    // Check client exists
     const { data: client } = await supabase
       .from("clients")
       .select("id,name")
@@ -87,7 +86,6 @@ export async function GET(request: Request) {
       return NextResponse.json({ ok: false, error: "Client not found" }, { status: 404 });
     }
 
-    // Get Xero connection
     const { data: connection, error: connError } = await supabase
       .from("accounting_connections")
       .select("*")
@@ -104,7 +102,6 @@ export async function GET(request: Request) {
       );
     }
 
-    // Get account mappings — only use reviewed/confirmed ones
     const { data: mappings } = await supabase
       .from("account_mappings")
       .select("xero_account_code,vat_classification,reviewed")
@@ -121,22 +118,21 @@ export async function GET(request: Request) {
       const code = String(mapping.xero_account_code).trim();
       const classification = mapping.vat_classification as VatClassification;
 
-      // Store the original code
+      // Store original code
       accountMap.set(code, classification);
 
-      // Also store without leading zeros — Xero is inconsistent between
-      // its Accounts API (returns "0010") and transaction APIs (returns "10")
+      // Also store without leading zeros
+      // Xero Accounts API returns "0010" but transactions return "10"
       const stripped = code.replace(/^0+/, "");
       if (stripped && stripped !== code) {
         accountMap.set(stripped, classification);
       }
     }
 
-    // Warn but don't block — unreviewed accounts just won't be imported
     const warnings: string[] = [];
     if (unreviewedCount > 0) {
       warnings.push(
-        `${unreviewedCount} account(s) are awaiting your review and have been excluded from this import. Go to Account Mappings to review them.`
+        `${unreviewedCount} account(s) are awaiting your review and have been excluded from this import.`
       );
     }
 
@@ -145,8 +141,7 @@ export async function GET(request: Request) {
         {
           ok: false,
           error: "No confirmed account mappings found.",
-          message:
-            "Please go to Account Mappings and review your Xero income accounts before importing.",
+          message: "Please go to Account Mappings and review your Xero income accounts before importing.",
         },
         { status: 400 }
       );
@@ -218,9 +213,6 @@ export async function GET(request: Request) {
     let totalLinesSkipped = 0;
 
     // ── 1. INVOICES ────────────────────────────────────────────
-    // Xero requires fetching invoices in pages of 100 max with
-    // page parameter to get full line item detail.
-    // summaryOnly=false alone is not enough — we must paginate.
     let invoicePage = 1;
     let invoicesDone = false;
 
@@ -233,19 +225,12 @@ export async function GET(request: Request) {
           `&summaryOnly=false`
       );
 
-      if (!invoicesRes.ok) {
-        // Don't fail the whole import — just stop fetching invoices
-        invoicesDone = true;
-        break;
-      }
+      if (!invoicesRes.ok) { invoicesDone = true; break; }
 
       const invoicesJson = await invoicesRes.json();
       const invoices = invoicesJson.Invoices || [];
 
-      if (invoices.length === 0) {
-        invoicesDone = true;
-        break;
-      }
+      if (invoices.length === 0) { invoicesDone = true; break; }
 
       for (const invoice of invoices) {
         totalRecordsProcessed++;
@@ -282,118 +267,13 @@ export async function GET(request: Request) {
         }
       }
 
-      // Xero returns max 100 per page — if less than 100 we're done
-      if (invoices.length < 100) {
-        invoicesDone = true;
-      } else {
-        invoicePage++;
-      }
+      if (invoices.length < 100) { invoicesDone = true; } else { invoicePage++; }
     }
 
-    // ── 2. BANK TRANSACTIONS (receipts only) ──────────────────
-    // Xero bank transactions come back differently to invoices.
-    // "Receive Money" transactions post to an income account directly.
-    // The account code can be on the transaction OR on its line items.
-    let bankPage = 1;
-    let bankDone = false;
-
-    while (!bankDone) {
-      const bankRes = await xeroGet(
-        `https://api.xero.com/api.xro/2.0/BankTransactions` +
-          `?where=Type%3D%3D%22RECEIVE%22` +
-          `%26%26Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})` +
-          `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
-          `&page=${bankPage}`
-      );
-
-      if (!bankRes.ok) { bankDone = true; break; }
-
-      const bankJson = await bankRes.json();
-      const transactions = bankJson.BankTransactions || [];
-
-      if (transactions.length === 0) { bankDone = true; break; }
-
-      for (const txn of transactions) {
-        totalRecordsProcessed++;
-        const date = parseXeroDate(txn.Date || txn.DateString) || new Date();
-        const lines = txn.LineItems || [];
-
-        if (lines.length > 0) {
-          // Has line items — process each one
-          for (const [i, line] of lines.entries()) {
-            const code = String(line.AccountCode || "").trim();
-            const classification = accountMap.get(code);
-
-            if (!classification || classification === "excluded") {
-              totalLinesSkipped++;
-              continue;
-            }
-
-            const amount = Math.abs(safeNumber(line.LineAmount ?? line.UnitAmount ?? 0));
-            if (amount === 0) continue;
-
-            importedLines.push({
-              client_id: clientId,
-              source: "bank_transactions",
-              source_record_id: txn.BankTransactionID,
-              source_line_key: `bank_${txn.BankTransactionID}_${i}_${code}`,
-              transaction_date: isoDate(date),
-              account_code: code,
-              account_name: null,
-              description: line.Description || txn.Reference || null,
-              tax_type: line.TaxType || null,
-              vat_classification: classification,
-              amount: Number(amount.toFixed(2)),
-              updated_at: new Date().toISOString(),
-            });
-            totalLinesImported++;
-          }
-        } else {
-          // No line items — use the transaction-level account code
-          // This is common for simple Receive Money entries
-          const code = String(txn.LineItems?.[0]?.AccountCode || "").trim();
-          const fallbackCode = String(txn.Account?.Code || txn.AccountCode || "").trim();
-          const resolvedCode = code || fallbackCode;
-          const classification = resolvedCode ? accountMap.get(resolvedCode) : undefined;
-
-          if (!classification || classification === "excluded") {
-            totalLinesSkipped++;
-            continue;
-          }
-
-          const amount = Math.abs(safeNumber(txn.Total || txn.SubTotal || 0));
-          if (amount === 0) { totalLinesSkipped++; continue; }
-
-          importedLines.push({
-            client_id: clientId,
-            source: "bank_transactions",
-            source_record_id: txn.BankTransactionID,
-            source_line_key: `bank_${txn.BankTransactionID}_0_${resolvedCode}`,
-            transaction_date: isoDate(date),
-            account_code: resolvedCode,
-            account_name: null,
-            description: txn.Reference || txn.Narration || null,
-            tax_type: txn.LineItems?.[0]?.TaxType || null,
-            vat_classification: classification,
-            amount: Number(amount.toFixed(2)),
-            updated_at: new Date().toISOString(),
-          });
-          totalLinesImported++;
-        }
-      }
-
-      if (transactions.length < 100) { bankDone = true; } else { bankPage++; }
-    }
-
-    // ── 3. MANUAL JOURNALS ────────────────────────────────────
-    // Debug confirmed: for this Xero organisation, EPOS sales are recorded
-    // via manual journals crediting income accounts (negative LineAmount).
-    // We include only:
-    //   - Lines where LineAmount is NEGATIVE (credit = income posted)
-    //   - Lines where the AccountCode matches a mapped income account
-    //   - We explicitly exclude bank/clearing accounts (non-income codes)
-    // This matches the Xero P&L which picks up the same journal credits.
-
+    // ── 2. MANUAL JOURNALS ─────────────────────────────────────
+    // Sales for this business are recorded via EPOS manual journals
+    // which CREDIT income accounts (negative LineAmount in Xero).
+    // We only import negative lines on mapped income accounts.
     let journalPage = 1;
     let journalsDone = false;
 
@@ -419,9 +299,8 @@ export async function GET(request: Request) {
 
         for (const [i, line] of lines.entries()) {
           const code = String(line.AccountCode || "").trim();
-
-          // Only process lines that match a mapped income account
           const classification = accountMap.get(code);
+
           if (!classification || classification === "excluded") {
             totalLinesSkipped++;
             continue;
@@ -429,9 +308,7 @@ export async function GET(request: Request) {
 
           const lineAmount = safeNumber(line.LineAmount);
 
-          // Only include CREDIT lines (negative = income being posted)
-          // Positive lines on income accounts are reversals/corrections —
-          // we skip those to avoid double counting
+          // Only CREDIT lines (negative) = income being posted
           if (lineAmount >= 0) {
             totalLinesSkipped++;
             continue;
@@ -471,17 +348,13 @@ export async function GET(request: Request) {
 
       if (upsertError) {
         return NextResponse.json(
-          {
-            ok: false,
-            error: "Failed to save imported lines",
-            details: upsertError.message,
-          },
+          { ok: false, error: "Failed to save imported lines", details: upsertError.message },
           { status: 500 }
         );
       }
     }
 
-    // Now bucket into monthly turnover
+    // Bucket into monthly turnover
     type MonthBucket = {
       month_label: string;
       standard_rated: number;
@@ -536,39 +409,29 @@ export async function GET(request: Request) {
         .upsert(turnoverRows, { onConflict: "client_id,month_label,source" });
     }
 
-    // Calculate rolling VAT position
     const rollingTurnover = turnoverRows.reduce(
       (sum, row) =>
-        sum +
-        Number(row.standard_rated) +
-        Number(row.reduced_rated) +
-        Number(row.zero_rated),
+        sum + Number(row.standard_rated) + Number(row.reduced_rated) + Number(row.zero_rated),
       0
     );
 
     const thresholdPercent = (rollingTurnover / 90000) * 100;
 
     const riskStatus =
-      rollingTurnover >= 90000
-        ? "Registration Required"
-        : rollingTurnover >= 81000
-        ? "High Risk"
-        : rollingTurnover >= 72000
-        ? "Warning"
-        : rollingTurnover >= 63000
-        ? "Watch"
-        : "Low Risk";
+      rollingTurnover >= 90000 ? "Registration Required"
+      : rollingTurnover >= 81000 ? "High Risk"
+      : rollingTurnover >= 72000 ? "Warning"
+      : rollingTurnover >= 63000 ? "Watch"
+      : "Low Risk";
 
-    // Save VAT review
     await supabase.from("vat_reviews").insert({
       client_id: clientId,
       rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
       expected_next_30_days: 0,
       risk_status: riskStatus,
-      advice_note: `Xero import completed. ${totalLinesImported} lines imported from ${totalRecordsProcessed} records (invoices and bank transactions).${warnings.length > 0 ? " " + warnings.join(" ") : ""}`,
+      advice_note: `Xero import completed. ${totalLinesImported} lines imported from ${totalRecordsProcessed} records.${warnings.length > 0 ? " " + warnings.join(" ") : ""}`,
     });
 
-    // Create alert if needed
     let alertType: string | null = null;
     let alertMessage = "";
 
