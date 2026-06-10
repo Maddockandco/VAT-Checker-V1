@@ -121,18 +121,14 @@ export async function GET(request: Request) {
       const code = String(mapping.xero_account_code).trim();
       const classification = mapping.vat_classification as VatClassification;
 
-      // Store both the original code AND the stripped version (no leading zeros)
-      // Xero is inconsistent — the Accounts API returns "0010" but
-      // BankTransactions and Invoices return "10". We handle both.
+      // Store the original code
       accountMap.set(code, classification);
-      const stripped = code.replace(/^0+/, "") || code;
-      if (stripped !== code) {
+
+      // Also store without leading zeros — Xero is inconsistent between
+      // its Accounts API (returns "0010") and transaction APIs (returns "10")
+      const stripped = code.replace(/^0+/, "");
+      if (stripped && stripped !== code) {
         accountMap.set(stripped, classification);
-      }
-      // Also store zero-padded version up to 4 digits in case it's the other way round
-      const padded = code.padStart(4, "0");
-      if (padded !== code) {
-        accountMap.set(padded, classification);
       }
     }
 
