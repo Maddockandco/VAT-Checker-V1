@@ -378,68 +378,21 @@ export async function GET(request: Request) {
     }
 
     // ── 3. MANUAL JOURNALS ────────────────────────────────────
-    // For income accounts, credit entries (negative LineAmount) = income posted
-    // We also need to paginate journals
-    let journalPage = 1;
-    let journalsDone = false;
-
-    while (!journalsDone) {
-      const journalsRes = await xeroGet(
-        `https://api.xero.com/api.xro/2.0/ManualJournals` +
-          `?where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})` +
-          `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
-          `&page=${journalPage}`
-      );
-
-    if (!journalsRes.ok) { journalsDone = true; break; }
-
-    const journalsJson = await journalsRes.json();
-    const journals = journalsJson.ManualJournals || [];
-
-    if (journals.length === 0) { journalsDone = true; break; }
-
-      for (const journal of journals) {
-        totalRecordsProcessed++;
-        const date = parseXeroDate(journal.Date || journal.DateString) || new Date();
-        const lines = journal.JournalLines || [];
-
-        for (const [i, line] of lines.entries()) {
-          const code = String(line.AccountCode || "").trim();
-          const classification = accountMap.get(code);
-
-          if (!classification || classification === "excluded") {
-            totalLinesSkipped++;
-            continue;
-          }
-
-          // For manual journals posting to income accounts:
-          // In double-entry, income accounts are CREDITED (negative in Xero's convention)
-          // BUT some Xero setups show income journals as positive LineAmount
-          // We take the absolute value and include any non-zero line on an income account
-          const amount = safeNumber(line.LineAmount);
-          const absAmount = Math.abs(amount);
-          if (absAmount === 0) continue;
-
-          importedLines.push({
-            client_id: clientId,
-            source: "manual_journals",
-            source_record_id: journal.ManualJournalID,
-            source_line_key: `journal_${journal.ManualJournalID}_${i}_${code}`,
-            transaction_date: isoDate(date),
-            account_code: code,
-            account_name: null,
-            description: line.Description || journal.Narration || null,
-            tax_type: line.TaxType || null,
-            vat_classification: classification,
-            amount: Number(absAmount.toFixed(2)),
-            updated_at: new Date().toISOString(),
-          });
-          totalLinesImported++;
-        }
-      }
-
-      if (journals.length < 100) { journalsDone = true; } else { journalPage++; }
-    }
+    // Manual journals are intentionally skipped for now.
+    //
+    // Why: Xero manual journals include intercompany recharges, balance
+    // corrections, wage accruals and other non-income entries that also
+    // post to income account codes. Including them without additional
+    // filtering causes gross overstatement of turnover.
+    //
+    // The correct approach (to be built in a future phase) is to only
+    // include journals where:
+    //   - The narration explicitly indicates a sales correction
+    //   - The journal has been tagged with a specific tracking category
+    //   - The accountant has manually approved the journal for inclusion
+    //
+    // For now, invoices + bank transactions give an accurate turnover
+    // figure that matches the Xero P&L report.
 
     // Save all imported lines
     if (importedLines.length > 0) {
@@ -545,7 +498,7 @@ export async function GET(request: Request) {
       rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
       expected_next_30_days: 0,
       risk_status: riskStatus,
-      advice_note: `Xero import completed. ${totalLinesImported} lines imported from ${totalRecordsProcessed} records (invoices, bank transactions and manual journals).${warnings.length > 0 ? " " + warnings.join(" ") : ""}`,
+      advice_note: `Xero import completed. ${totalLinesImported} lines imported from ${totalRecordsProcessed} records (invoices and bank transactions).${warnings.length > 0 ? " " + warnings.join(" ") : ""}`,
     });
 
     // Create alert if needed
