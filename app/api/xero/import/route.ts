@@ -270,19 +270,15 @@ export async function GET(request: Request) {
       if (invoices.length < 100) { invoicesDone = true; } else { invoicePage++; }
     }
 
-    // ── 2. MANUAL JOURNALS ─────────────────────────────────────
-    // Sales for this business are recorded via EPOS manual journals
-    // which CREDIT income accounts (negative LineAmount in Xero).
-    // We only import negative lines on mapped income accounts.
+ // ── 2. MANUAL JOURNALS ─────────────────────────────────────
+    // NOTE: Xero ignores date filters on the ManualJournals endpoint.
+    // We fetch all journals and filter by date ourselves.
     let journalPage = 1;
     let journalsDone = false;
 
     while (!journalsDone) {
       const journalsRes = await xeroGet(
-        `https://api.xero.com/api.xro/2.0/ManualJournals` +
-          `?where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})` +
-          `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
-          `&page=${journalPage}`
+        `https://api.xero.com/api.xro/2.0/ManualJournals?page=${journalPage}`
       );
 
       if (!journalsRes.ok) { journalsDone = true; break; }
@@ -293,8 +289,13 @@ export async function GET(request: Request) {
       if (journals.length === 0) { journalsDone = true; break; }
 
       for (const journal of journals) {
+        const date = parseXeroDate(journal.Date || journal.DateString);
+
+        // Filter by date ourselves — Xero ignores where clause on journals
+        if (!date) { totalLinesSkipped++; continue; }
+        if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
+
         totalRecordsProcessed++;
-        const date = parseXeroDate(journal.Date || journal.DateString) || new Date();
         const lines = journal.JournalLines || [];
 
         for (const [i, line] of lines.entries()) {
