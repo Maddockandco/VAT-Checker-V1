@@ -1,11 +1,8 @@
-```typescript
-import AccountMappings from "@/components/AccountMappings";
-```
-
 "use client";
 
 import React, { useEffect, useState } from "react";
 import { createClient, type User } from "@supabase/supabase-js";
+import AccountMappings from "@/components/AccountMappings";
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
@@ -924,6 +921,15 @@ export default function VatDashboard() {
                 </div>
               </div>
             </div>
+          </div>
+        )}
+
+        {selectedClientId && (
+          <div className="mb-6">
+            <AccountMappings
+              clientId={selectedClientId}
+              clientName={clientName}
+            />
           </div>
         )}
 
