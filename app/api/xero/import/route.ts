@@ -283,6 +283,9 @@ export async function GET(request: Request) {
     }
 
     // ── 2. BANK TRANSACTIONS (receipts only) ──────────────────
+    // Xero bank transactions come back differently to invoices.
+    // "Receive Money" transactions post to an income account directly.
+    // The account code can be on the transaction OR on its line items.
     let bankPage = 1;
     let bankDone = false;
 
@@ -307,28 +310,62 @@ export async function GET(request: Request) {
         const date = parseXeroDate(txn.Date || txn.DateString) || new Date();
         const lines = txn.LineItems || [];
 
-        for (const [i, line] of lines.entries()) {
-          const code = String(line.AccountCode || "").trim();
-          const classification = accountMap.get(code);
+        if (lines.length > 0) {
+          // Has line items — process each one
+          for (const [i, line] of lines.entries()) {
+            const code = String(line.AccountCode || "").trim();
+            const classification = accountMap.get(code);
+
+            if (!classification || classification === "excluded") {
+              totalLinesSkipped++;
+              continue;
+            }
+
+            const amount = Math.abs(safeNumber(line.LineAmount ?? line.UnitAmount ?? 0));
+            if (amount === 0) continue;
+
+            importedLines.push({
+              client_id: clientId,
+              source: "bank_transactions",
+              source_record_id: txn.BankTransactionID,
+              source_line_key: `bank_${txn.BankTransactionID}_${i}_${code}`,
+              transaction_date: isoDate(date),
+              account_code: code,
+              account_name: null,
+              description: line.Description || txn.Reference || null,
+              tax_type: line.TaxType || null,
+              vat_classification: classification,
+              amount: Number(amount.toFixed(2)),
+              updated_at: new Date().toISOString(),
+            });
+            totalLinesImported++;
+          }
+        } else {
+          // No line items — use the transaction-level account code
+          // This is common for simple Receive Money entries
+          const code = String(txn.LineItems?.[0]?.AccountCode || "").trim();
+          const fallbackCode = String(txn.Account?.Code || txn.AccountCode || "").trim();
+          const resolvedCode = code || fallbackCode;
+          const classification = resolvedCode ? accountMap.get(resolvedCode) : undefined;
 
           if (!classification || classification === "excluded") {
             totalLinesSkipped++;
             continue;
           }
 
-          const amount = Math.abs(safeNumber(line.LineAmount));
-          if (amount === 0) continue;
+          const amount = Math.abs(safeNumber(txn.Total || txn.SubTotal || 0));
+          if (amount === 0) { totalLinesSkipped++; continue; }
 
           importedLines.push({
             client_id: clientId,
             source: "bank_transactions",
             source_record_id: txn.BankTransactionID,
-            source_line_key: `bank_${txn.BankTransactionID}_${i}_${code}`,
+            source_line_key: `bank_${txn.BankTransactionID}_0_${resolvedCode}`,
             transaction_date: isoDate(date),
-            account_code: code,
+            account_code: resolvedCode,
             account_name: null,
-            description: line.Description || null,
-            tax_type: line.TaxType || null,
+            description: txn.Reference || txn.Narration || null,
+            tax_type: txn.LineItems?.[0]?.TaxType || null,
             vat_classification: classification,
             amount: Number(amount.toFixed(2)),
             updated_at: new Date().toISOString(),
@@ -341,16 +378,25 @@ export async function GET(request: Request) {
     }
 
     // ── 3. MANUAL JOURNALS ────────────────────────────────────
-    // Journals include full line detail by default — no pagination needed
-    const journalsRes = await xeroGet(
-      `https://api.xero.com/api.xro/2.0/ManualJournals` +
-        `?where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})` +
-        `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})`
-    );
+    // For income accounts, credit entries (negative LineAmount) = income posted
+    // We also need to paginate journals
+    let journalPage = 1;
+    let journalsDone = false;
 
-    if (journalsRes.ok) {
-      const journalsJson = await journalsRes.json();
-      const journals = journalsJson.ManualJournals || [];
+    while (!journalsDone) {
+      const journalsRes = await xeroGet(
+        `https://api.xero.com/api.xro/2.0/ManualJournals` +
+          `?where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})` +
+          `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
+          `&page=${journalPage}`
+      );
+
+    if (!journalsRes.ok) { journalsDone = true; break; }
+
+    const journalsJson = await journalsRes.json();
+    const journals = journalsJson.ManualJournals || [];
+
+    if (journals.length === 0) { journalsDone = true; break; }
 
       for (const journal of journals) {
         totalRecordsProcessed++;
@@ -366,9 +412,11 @@ export async function GET(request: Request) {
             continue;
           }
 
-          // For journals: credit lines to income accounts = income
+          // For manual journals posting to income accounts:
+          // In double-entry, income accounts are CREDITED (negative in Xero's convention)
+          // BUT some Xero setups show income journals as positive LineAmount
+          // We take the absolute value and include any non-zero line on an income account
           const amount = safeNumber(line.LineAmount);
-          if (amount >= 0) continue; // Skip debit lines to income accounts
           const absAmount = Math.abs(amount);
           if (absAmount === 0) continue;
 
@@ -389,6 +437,8 @@ export async function GET(request: Request) {
           totalLinesImported++;
         }
       }
+
+      if (journals.length < 100) { journalsDone = true; } else { journalPage++; }
     }
 
     // Save all imported lines
