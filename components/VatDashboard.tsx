@@ -1,3 +1,7 @@
+```typescript
+import AccountMappings from "@/components/AccountMappings";
+```
+
 "use client";
 
 import React, { useEffect, useState } from "react";
