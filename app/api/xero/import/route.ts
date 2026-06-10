@@ -117,12 +117,7 @@ export async function GET(request: Request) {
       }
       const code = String(mapping.xero_account_code).trim();
       const classification = mapping.vat_classification as VatClassification;
-
-      // Store original code
       accountMap.set(code, classification);
-
-      // Also store without leading zeros
-      // Xero Accounts API returns "0010" but transactions return "10"
       const stripped = code.replace(/^0+/, "");
       if (stripped && stripped !== code) {
         accountMap.set(stripped, classification);
@@ -131,18 +126,12 @@ export async function GET(request: Request) {
 
     const warnings: string[] = [];
     if (unreviewedCount > 0) {
-      warnings.push(
-        `${unreviewedCount} account(s) are awaiting your review and have been excluded from this import.`
-      );
+      warnings.push(`${unreviewedCount} account(s) are awaiting your review and have been excluded.`);
     }
 
     if (accountMap.size === 0) {
       return NextResponse.json(
-        {
-          ok: false,
-          error: "No confirmed account mappings found.",
-          message: "Please go to Account Mappings and review your Xero income accounts before importing.",
-        },
+        { ok: false, error: "No confirmed account mappings found." },
         { status: 400 }
       );
     }
@@ -164,7 +153,6 @@ export async function GET(request: Request) {
         const refreshed = await refreshXeroToken(refreshToken);
         accessToken = refreshed.access_token;
         refreshToken = refreshed.refresh_token;
-
         await supabase
           .from("accounting_connections")
           .update({
@@ -175,7 +163,6 @@ export async function GET(request: Request) {
             ).toISOString(),
           })
           .eq("id", connection.id);
-
         res = await fetch(apiUrl, {
           cache: "no-store",
           headers: {
@@ -185,7 +172,6 @@ export async function GET(request: Request) {
           },
         });
       }
-
       return res;
     }
 
@@ -226,10 +212,8 @@ export async function GET(request: Request) {
       );
 
       if (!invoicesRes.ok) { invoicesDone = true; break; }
-
       const invoicesJson = await invoicesRes.json();
       const invoices = invoicesJson.Invoices || [];
-
       if (invoices.length === 0) { invoicesDone = true; break; }
 
       for (const invoice of invoices) {
@@ -240,12 +224,7 @@ export async function GET(request: Request) {
         for (const [i, line] of lines.entries()) {
           const code = String(line.AccountCode || "").trim();
           const classification = accountMap.get(code);
-
-          if (!classification || classification === "excluded") {
-            totalLinesSkipped++;
-            continue;
-          }
-
+          if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
           const amount = Math.abs(safeNumber(line.LineAmount));
           if (amount === 0) continue;
 
@@ -266,13 +245,12 @@ export async function GET(request: Request) {
           totalLinesImported++;
         }
       }
-
       if (invoices.length < 100) { invoicesDone = true; } else { invoicePage++; }
     }
 
- // ── 2. MANUAL JOURNALS ─────────────────────────────────────
-    // NOTE: Xero ignores date filters on the ManualJournals endpoint.
-    // We fetch all journals and filter by date ourselves.
+    // ── 2. MANUAL JOURNALS ─────────────────────────────────────
+    // IMPORTANT: Xero ignores date filters on the ManualJournals endpoint.
+    // We fetch ALL journals and filter by date in our own code below.
     let journalPage = 1;
     let journalsDone = false;
 
@@ -282,16 +260,15 @@ export async function GET(request: Request) {
       );
 
       if (!journalsRes.ok) { journalsDone = true; break; }
-
       const journalsJson = await journalsRes.json();
       const journals = journalsJson.ManualJournals || [];
-
       if (journals.length === 0) { journalsDone = true; break; }
 
       for (const journal of journals) {
         const date = parseXeroDate(journal.Date || journal.DateString);
 
-        // Filter by date ourselves — Xero ignores where clause on journals
+        // Skip journals outside our date window — we do this ourselves
+        // because Xero ignores the where clause on ManualJournals
         if (!date) { totalLinesSkipped++; continue; }
         if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
 
@@ -301,19 +278,11 @@ export async function GET(request: Request) {
         for (const [i, line] of lines.entries()) {
           const code = String(line.AccountCode || "").trim();
           const classification = accountMap.get(code);
-
-          if (!classification || classification === "excluded") {
-            totalLinesSkipped++;
-            continue;
-          }
+          if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
 
           const lineAmount = safeNumber(line.LineAmount);
-
-          // Only CREDIT lines (negative) = income being posted
-          if (lineAmount >= 0) {
-            totalLinesSkipped++;
-            continue;
-          }
+          // Only CREDIT lines (negative LineAmount) = income being posted
+          if (lineAmount >= 0) { totalLinesSkipped++; continue; }
 
           const absAmount = Math.abs(lineAmount);
           if (absAmount === 0) continue;
@@ -335,7 +304,6 @@ export async function GET(request: Request) {
           totalLinesImported++;
         }
       }
-
       if (journals.length < 100) { journalsDone = true; } else { journalPage++; }
     }
 
@@ -343,9 +311,7 @@ export async function GET(request: Request) {
     if (importedLines.length > 0) {
       const { error: upsertError } = await supabase
         .from("xero_imported_lines")
-        .upsert(importedLines, {
-          onConflict: "client_id,source_line_key",
-        });
+        .upsert(importedLines, { onConflict: "client_id,source_line_key" });
 
       if (upsertError) {
         return NextResponse.json(
@@ -430,7 +396,7 @@ export async function GET(request: Request) {
       rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
       expected_next_30_days: 0,
       risk_status: riskStatus,
-      advice_note: `Xero import completed. ${totalLinesImported} lines imported from ${totalRecordsProcessed} records.${warnings.length > 0 ? " " + warnings.join(" ") : ""}`,
+      advice_note: `Xero import completed. ${totalLinesImported} lines imported. Import window: ${fromIso} to ${toIso}.${warnings.length > 0 ? " " + warnings.join(" ") : ""}`,
     });
 
     let alertType: string | null = null;
