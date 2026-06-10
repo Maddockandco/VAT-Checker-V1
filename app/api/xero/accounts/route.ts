@@ -1,5 +1,10 @@
+// app/api/xero/accounts/route.ts
+// Pulls ALL income accounts from Xero, classifies them using HMRC rules,
+// saves to account_mappings table for accountant review
+
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
+import { classifyAccount } from "@/lib/hmrc-vat-rules";
 
 type XeroAccount = {
   AccountID?: string;
@@ -9,24 +14,17 @@ type XeroAccount = {
   TaxType?: string;
   Status?: string;
   Class?: string;
-  EnablePaymentsToAccount?: boolean;
-  ShowInExpenseClaims?: boolean;
 };
 
 async function refreshXeroToken(refreshToken: string) {
-  const xeroClientId = process.env.XERO_CLIENT_ID;
-  const xeroClientSecret = process.env.XERO_CLIENT_SECRET;
-
-  if (!xeroClientId || !xeroClientSecret) {
-    throw new Error("Missing Xero client credentials");
-  }
-
   const response = await fetch("https://identity.xero.com/connect/token", {
     method: "POST",
     headers: {
       Authorization:
         "Basic " +
-        Buffer.from(`${xeroClientId}:${xeroClientSecret}`).toString("base64"),
+        Buffer.from(
+          `${process.env.XERO_CLIENT_ID}:${process.env.XERO_CLIENT_SECRET}`
+        ).toString("base64"),
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams({
@@ -35,21 +33,8 @@ async function refreshXeroToken(refreshToken: string) {
     }),
   });
 
-  if (!response.ok) {
-    throw new Error(await response.text());
-  }
-
+  if (!response.ok) throw new Error(await response.text());
   return response.json();
-}
-
-async function xeroFetch(url: string, accessToken: string, tenantId: string) {
-  return fetch(url, {
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      "Xero-tenant-id": tenantId,
-      Accept: "application/json",
-    },
-  });
 }
 
 export async function GET(request: Request) {
@@ -61,25 +46,13 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
     }
 
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseServiceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
 
-    if (!supabaseUrl || !supabaseServiceRoleKey) {
-      return NextResponse.json(
-        { error: "Missing Supabase environment variables" },
-        { status: 500 }
-      );
-    }
-
-    const supabase = createClient(supabaseUrl, supabaseServiceRoleKey);
-
-    const { data: client } = await supabase
-      .from("clients")
-      .select("id,name")
-      .eq("id", clientId)
-      .single();
-
-    const { data: connection, error: connectionError } = await supabase
+    // Get Xero connection for this client
+    const { data: connection, error: connError } = await supabase
       .from("accounting_connections")
       .select("*")
       .eq("client_id", clientId)
@@ -88,33 +61,31 @@ export async function GET(request: Request) {
       .limit(1)
       .single();
 
-    if (connectionError || !connection) {
+    if (connError || !connection) {
       return NextResponse.json(
-        {
-          error: "No Xero connection found",
-          details: connectionError?.message,
-        },
+        { error: "No Xero connection found for this client" },
         { status: 404 }
       );
     }
 
     let accessToken = connection.access_token;
     let refreshToken = connection.refresh_token;
-    let tokenWasRefreshed = false;
 
-    async function fetchWithRefresh(apiUrl: string) {
-      let response = await xeroFetch(
-        apiUrl,
-        accessToken,
-        connection.provider_tenant_id
-      );
+    // Helper to fetch from Xero with auto token refresh
+    async function xeroGet(apiUrl: string): Promise<Response> {
+      let res = await fetch(apiUrl, {
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Xero-tenant-id": connection.provider_tenant_id,
+          Accept: "application/json",
+        },
+      });
 
-      if (response.status === 401) {
+      if (res.status === 401) {
         const refreshed = await refreshXeroToken(refreshToken);
-
         accessToken = refreshed.access_token;
         refreshToken = refreshed.refresh_token;
-        tokenWasRefreshed = true;
 
         await supabase
           .from("accounting_connections")
@@ -127,65 +98,228 @@ export async function GET(request: Request) {
           })
           .eq("id", connection.id);
 
-        response = await xeroFetch(
-          apiUrl,
-          accessToken,
-          connection.provider_tenant_id
-        );
+        res = await fetch(apiUrl, {
+          cache: "no-store",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            "Xero-tenant-id": connection.provider_tenant_id,
+            Accept: "application/json",
+          },
+        });
       }
 
-      return response;
+      return res;
     }
 
-    const accountsUrl = "https://api.xero.com/api.xro/2.0/Accounts";
-    const accountsResponse = await fetchWithRefresh(accountsUrl);
+    // Pull ALL accounts from Xero
+    const accountsRes = await xeroGet(
+      "https://api.xero.com/api.xro/2.0/Accounts?where=Class%3D%3D%22REVENUE%22"
+    );
 
-    if (!accountsResponse.ok) {
+    if (!accountsRes.ok) {
       return NextResponse.json(
         {
-          error: "Xero accounts import failed",
-          status: accountsResponse.status,
-          details: await accountsResponse.text(),
+          error: "Failed to fetch accounts from Xero",
+          status: accountsRes.status,
+          details: await accountsRes.text(),
         },
-        { status: accountsResponse.status === 429 ? 429 : 400 }
+        { status: 400 }
       );
     }
 
-    const accountsData = await accountsResponse.json();
-    const accounts: XeroAccount[] = accountsData.Accounts || [];
+    const accountsJson = await accountsRes.json();
+    const allAccounts: XeroAccount[] = accountsJson.Accounts || [];
 
-    const simplifiedAccounts = accounts.map((account) => ({
-      accountId: account.AccountID || null,
-      code: account.Code || null,
-      name: account.Name || null,
-      type: account.Type || null,
-      taxType: account.TaxType || null,
-      status: account.Status || null,
-      class: account.Class || null,
-      isRevenueType:
-        String(account.Type || "").toUpperCase() === "REVENUE" ||
-        String(account.Type || "").toUpperCase() === "SALES" ||
-        String(account.Type || "").toUpperCase() === "OTHERINCOME",
-    }));
+    // Filter to income/revenue class accounts only
+    // Cast a wide net — Revenue, Sales, Other Income all count
+    const incomeAccounts = allAccounts.filter((acc) => {
+      if (String(acc.Status || "").toUpperCase() === "ARCHIVED") return false;
 
-    const revenueAccounts = simplifiedAccounts.filter(
-      (account) => account.isRevenueType
+      const type = String(acc.Type || "").toUpperCase();
+      const accountClass = String(acc.Class || "").toUpperCase();
+
+      return (
+        accountClass === "REVENUE" ||
+        type === "REVENUE" ||
+        type === "SALES" ||
+        type === "OTHERINCOME" ||
+        type === "OTHER INCOME"
+      );
+    });
+
+    // Get existing mappings for this client so we don't overwrite reviewed ones
+    const { data: existingMappings } = await supabase
+      .from("account_mappings")
+      .select("*")
+      .eq("client_id", clientId);
+
+    const existingByCode = new Map(
+      (existingMappings || []).map((m) => [m.xero_account_code, m])
+    );
+
+    // Classify each account using HMRC rules
+    const mappingsToUpsert = [];
+    const results = [];
+
+    for (const account of incomeAccounts) {
+      const code = String(account.Code || "").trim();
+      const name = String(account.Name || "Unknown").trim();
+
+      if (!code) continue;
+
+      const existing = existingByCode.get(code);
+
+      // Don't overwrite if already reviewed by accountant
+      if (existing?.reviewed) {
+        results.push({
+          code,
+          name,
+          type: account.Type,
+          taxType: account.TaxType,
+          classification: existing.vat_classification,
+          reviewed: true,
+          flagReason: existing.flag_reason,
+          hmrcGuidance: null,
+          confidence: "confirmed_by_accountant",
+        });
+        continue;
+      }
+
+      // Run HMRC classification
+      const classification = classifyAccount({
+        xeroAccountName: name,
+        xeroAccountType: account.Type || null,
+        xeroTaxType: account.TaxType || null,
+      });
+
+      mappingsToUpsert.push({
+        client_id: clientId,
+        xero_account_code: code,
+        xero_account_name: name,
+        xero_account_type: account.Type || null,
+        xero_tax_type: account.TaxType || null,
+        vat_classification: classification.classification,
+        flag_reason: classification.flagReason,
+        reviewed: false,
+      });
+
+      results.push({
+        code,
+        name,
+        type: account.Type,
+        taxType: account.TaxType,
+        classification: classification.classification,
+        confidence: classification.confidence,
+        flagSeverity: classification.flagSeverity,
+        flagReason: classification.flagReason,
+        hmrcGuidance: classification.hmrcGuidance,
+        reviewed: false,
+      });
+    }
+
+    // Save new/updated mappings (skip already-reviewed ones)
+    if (mappingsToUpsert.length > 0) {
+      await supabase
+        .from("account_mappings")
+        .upsert(mappingsToUpsert, {
+          onConflict: "client_id,xero_account_code",
+          ignoreDuplicates: false,
+        });
+    }
+
+    const needsReview = results.filter(
+      (r) => r.classification === "needs_review"
+    );
+    const confirmed = results.filter((r) => r.reviewed);
+    const autoClassified = results.filter(
+      (r) => !r.reviewed && r.classification !== "needs_review"
     );
 
     return NextResponse.json({
-      message: "Xero accounts loaded successfully",
+      ok: true,
       clientId,
-      clientName: client?.name || null,
-      tokenWasRefreshed,
-      totalAccounts: simplifiedAccounts.length,
-      revenueAccountsFound: revenueAccounts.length,
-      revenueAccounts,
-      allAccounts: simplifiedAccounts,
+      totalIncomeAccounts: results.length,
+      needsReviewCount: needsReview.length,
+      autoClassifiedCount: autoClassified.length,
+      confirmedByAccountantCount: confirmed.length,
+      accounts: results,
+      message:
+        needsReview.length > 0
+          ? `${needsReview.length} account(s) need your review before VAT can be calculated`
+          : "All accounts classified — ready to import",
     });
   } catch (error) {
     return NextResponse.json(
       {
-        error: "Unexpected Xero accounts failure",
+        error: "Unexpected error fetching Xero accounts",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
+}
+
+// POST — accountant updates a classification
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { clientId, accountCode, classification, notes } = body;
+
+    if (!clientId || !accountCode || !classification) {
+      return NextResponse.json(
+        { error: "Missing clientId, accountCode or classification" },
+        { status: 400 }
+      );
+    }
+
+    const validClassifications = [
+      "standard_rated",
+      "reduced_rated",
+      "zero_rated",
+      "exempt",
+      "out_of_scope",
+      "excluded",
+    ];
+
+    if (!validClassifications.includes(classification)) {
+      return NextResponse.json(
+        { error: "Invalid classification value" },
+        { status: 400 }
+      );
+    }
+
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const { error } = await supabase
+      .from("account_mappings")
+      .update({
+        vat_classification: classification,
+        reviewed: true,
+        reviewed_at: new Date().toISOString(),
+        notes: notes || null,
+        flag_reason: null, // Clear the flag once reviewed
+      })
+      .eq("client_id", clientId)
+      .eq("xero_account_code", accountCode);
+
+    if (error) {
+      return NextResponse.json(
+        { error: "Failed to update mapping", details: error.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      message: `Account ${accountCode} classified as ${classification}`,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: "Unexpected error updating account mapping",
         details: error instanceof Error ? error.message : String(error),
       },
       { status: 500 }
