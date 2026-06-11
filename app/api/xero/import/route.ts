@@ -1,6 +1,6 @@
 // app/api/xero/import/route.ts
 // Imports transactions from Xero using confirmed account mappings
-// Handles invoices and manual journals
+// Handles invoices, bank transactions and manual journals
 
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
@@ -206,7 +206,7 @@ export async function GET(request: Request) {
       const invoicesRes = await xeroGet(
         `https://api.xero.com/api.xro/2.0/Invoices` +
           `?Type=ACCREC` +
-          `&where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C${fromDate.getDate()})%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
+          `&where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C1)%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
           `&page=${invoicePage}` +
           `&summaryOnly=false`
       );
@@ -219,6 +219,8 @@ export async function GET(request: Request) {
       for (const invoice of invoices) {
         totalRecordsProcessed++;
         const date = parseXeroDate(invoice.Date || invoice.DateString) || new Date();
+        // Double-check date is in window
+        if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
         const lines = invoice.LineItems || [];
 
         for (const [i, line] of lines.entries()) {
@@ -248,9 +250,68 @@ export async function GET(request: Request) {
       if (invoices.length < 100) { invoicesDone = true; } else { invoicePage++; }
     }
 
-    // ── 2. MANUAL JOURNALS ─────────────────────────────────────
-    // IMPORTANT: Xero ignores date filters on the ManualJournals endpoint.
-    // We fetch ALL journals and filter by date in our own code below.
+    // ── 2. BANK TRANSACTIONS (receipts only) ──────────────────
+    // For BMA Leisure style businesses, Stripe and Booking.com receipts
+    // post directly to income accounts via bank transactions.
+    // We use date filter in the query AND verify in code.
+    let bankPage = 1;
+    let bankDone = false;
+
+    while (!bankDone) {
+      const bankRes = await xeroGet(
+        `https://api.xero.com/api.xro/2.0/BankTransactions` +
+          `?where=Type%3D%3D%22RECEIVE%22` +
+          `%26%26Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C1)` +
+          `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
+          `&page=${bankPage}`
+      );
+
+      if (!bankRes.ok) { bankDone = true; break; }
+      const bankJson = await bankRes.json();
+      const transactions = bankJson.BankTransactions || [];
+      if (transactions.length === 0) { bankDone = true; break; }
+
+      for (const txn of transactions) {
+        const date = parseXeroDate(txn.Date || txn.DateString);
+        if (!date) { totalLinesSkipped++; continue; }
+        // Double-check date is in window
+        if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
+
+        totalRecordsProcessed++;
+        const lines = txn.LineItems || [];
+
+        for (const [i, line] of lines.entries()) {
+          const code = String(line.AccountCode || "").trim();
+          const classification = accountMap.get(code);
+          if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
+
+          const amount = Math.abs(safeNumber(line.LineAmount ?? line.UnitAmount ?? 0));
+          if (amount === 0) continue;
+
+          importedLines.push({
+            client_id: clientId,
+            source: "bank_transactions",
+            source_record_id: txn.BankTransactionID,
+            source_line_key: `bank_${txn.BankTransactionID}_${i}_${code}`,
+            transaction_date: isoDate(date),
+            account_code: code,
+            account_name: null,
+            description: line.Description || txn.Reference || null,
+            tax_type: line.TaxType || null,
+            vat_classification: classification,
+            amount: Number(amount.toFixed(2)),
+            updated_at: new Date().toISOString(),
+          });
+          totalLinesImported++;
+        }
+      }
+      if (transactions.length < 100) { bankDone = true; } else { bankPage++; }
+    }
+
+    // ── 3. MANUAL JOURNALS ─────────────────────────────────────
+    // For businesses that record sales via EPOS journals (e.g. Tangerine Trees).
+    // Xero ignores date filters on ManualJournals so we filter in code.
+    // Only negative LineAmount on income accounts = income credit.
     let journalPage = 1;
     let journalsDone = false;
 
@@ -266,10 +327,8 @@ export async function GET(request: Request) {
 
       for (const journal of journals) {
         const date = parseXeroDate(journal.Date || journal.DateString);
-
-        // Skip journals outside our date window — we do this ourselves
-        // because Xero ignores the where clause on ManualJournals
         if (!date) { totalLinesSkipped++; continue; }
+        // Filter by date in code — Xero ignores where clause on ManualJournals
         if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
 
         totalRecordsProcessed++;
@@ -281,7 +340,7 @@ export async function GET(request: Request) {
           if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
 
           const lineAmount = safeNumber(line.LineAmount);
-          // Only CREDIT lines (negative LineAmount) = income being posted
+          // Only CREDIT lines (negative) = income being posted
           if (lineAmount >= 0) { totalLinesSkipped++; continue; }
 
           const absAmount = Math.abs(lineAmount);
@@ -339,14 +398,7 @@ export async function GET(request: Request) {
       const label = monthLabel(date);
 
       if (!buckets.has(key)) {
-        buckets.set(key, {
-          month_label: label,
-          standard_rated: 0,
-          reduced_rated: 0,
-          zero_rated: 0,
-          exempt: 0,
-          out_of_scope: 0,
-        });
+        buckets.set(key, { month_label: label, standard_rated: 0, reduced_rated: 0, zero_rated: 0, exempt: 0, out_of_scope: 0 });
       }
 
       const bucket = buckets.get(key)!;
@@ -377,8 +429,7 @@ export async function GET(request: Request) {
     }
 
     const rollingTurnover = turnoverRows.reduce(
-      (sum, row) =>
-        sum + Number(row.standard_rated) + Number(row.reduced_rated) + Number(row.zero_rated),
+      (sum, row) => sum + Number(row.standard_rated) + Number(row.reduced_rated) + Number(row.zero_rated),
       0
     );
 
