@@ -250,62 +250,69 @@ export async function GET(request: Request) {
       if (invoices.length < 100) { invoicesDone = true; } else { invoicePage++; }
     }
 
-    // ── 2. BANK TRANSACTIONS (receipts only) ──────────────────
+    // ── 2. BANK TRANSACTIONS (receipts AND refunds) ────────────
     // For BMA Leisure style businesses, Stripe and Booking.com receipts
-    // post directly to income accounts via bank transactions.
-    // We use date filter in the query AND verify in code.
-    let bankPage = 1;
-    let bankDone = false;
+    // post directly to income accounts via RECEIVE bank transactions.
+    // Refunds post as SPEND transactions to the same income accounts.
+    // We fetch both and use negative amounts for SPEND to match the P&L.
+    for (const txnType of ["RECEIVE", "SPEND"]) {
+      let bankPage = 1;
+      let bankDone = false;
 
-    while (!bankDone) {
-      const bankRes = await xeroGet(
-        `https://api.xero.com/api.xro/2.0/BankTransactions` +
-          `?where=Type%3D%3D%22RECEIVE%22` +
-          `%26%26Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C1)` +
-          `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
-          `&page=${bankPage}`
-      );
+      while (!bankDone) {
+        const bankRes = await xeroGet(
+          `https://api.xero.com/api.xro/2.0/BankTransactions` +
+            `?where=Type%3D%3D%22${txnType}%22` +
+            `%26%26Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C1)` +
+            `%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
+            `&page=${bankPage}`
+        );
 
-      if (!bankRes.ok) { bankDone = true; break; }
-      const bankJson = await bankRes.json();
-      const transactions = bankJson.BankTransactions || [];
-      if (transactions.length === 0) { bankDone = true; break; }
+        if (!bankRes.ok) { bankDone = true; break; }
+        const bankJson = await bankRes.json();
+        const transactions = bankJson.BankTransactions || [];
+        if (transactions.length === 0) { bankDone = true; break; }
 
-      for (const txn of transactions) {
-        const date = parseXeroDate(txn.Date || txn.DateString);
-        if (!date) { totalLinesSkipped++; continue; }
-        // Double-check date is in window
-        if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
+        for (const txn of transactions) {
+          const date = parseXeroDate(txn.Date || txn.DateString);
+          if (!date) { totalLinesSkipped++; continue; }
+          if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
 
-        totalRecordsProcessed++;
-        const lines = txn.LineItems || [];
+          totalRecordsProcessed++;
+          const lines = txn.LineItems || [];
 
-        for (const [i, line] of lines.entries()) {
-          const code = String(line.AccountCode || "").trim();
-          const classification = accountMap.get(code);
-          if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
+          for (const [i, line] of lines.entries()) {
+            const code = String(line.AccountCode || "").trim();
+            const classification = accountMap.get(code);
+            if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
 
-          const amount = Math.abs(safeNumber(line.LineAmount ?? line.UnitAmount ?? 0));
-          if (amount === 0) continue;
+            const rawAmount = safeNumber(line.LineAmount ?? line.UnitAmount ?? 0);
+            if (rawAmount === 0) continue;
 
-          importedLines.push({
-            client_id: clientId,
-            source: "bank_transactions",
-            source_record_id: txn.BankTransactionID,
-            source_line_key: `bank_${txn.BankTransactionID}_${i}_${code}`,
-            transaction_date: isoDate(date),
-            account_code: code,
-            account_name: null,
-            description: line.Description || txn.Reference || null,
-            tax_type: line.TaxType || null,
-            vat_classification: classification,
-            amount: Number(amount.toFixed(2)),
-            updated_at: new Date().toISOString(),
-          });
-          totalLinesImported++;
+            // RECEIVE = positive income, SPEND = negative (refund/deduction)
+            const amount = txnType === "SPEND"
+              ? -Math.abs(rawAmount)
+              : Math.abs(rawAmount);
+
+            importedLines.push({
+              client_id: clientId,
+              source: "bank_transactions",
+              source_record_id: txn.BankTransactionID,
+              source_line_key: `bank_${txnType}_${txn.BankTransactionID}_${i}_${code}`,
+              transaction_date: isoDate(date),
+              account_code: code,
+              account_name: null,
+              description: line.Description || txn.Reference || null,
+              tax_type: line.TaxType || null,
+              vat_classification: classification,
+              amount: Number(amount.toFixed(2)),
+              updated_at: new Date().toISOString(),
+            });
+            totalLinesImported++;
+          }
         }
+        if (transactions.length < 100) { bankDone = true; } else { bankPage++; }
       }
-      if (transactions.length < 100) { bankDone = true; } else { bankPage++; }
     }
 
     // ── 3. MANUAL JOURNALS ─────────────────────────────────────
@@ -403,7 +410,7 @@ export async function GET(request: Request) {
 
       const bucket = buckets.get(key)!;
       const classification = line.vat_classification as VatClassification;
-
+      // Amount can be negative for refunds — add directly (negative reduces the bucket)
       if (classification === "standard_rated") bucket.standard_rated += line.amount;
       else if (classification === "reduced_rated") bucket.reduced_rated += line.amount;
       else if (classification === "zero_rated") bucket.zero_rated += line.amount;
