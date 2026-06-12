@@ -1,6 +1,6 @@
 // app/api/xero/import/route.ts
 // Imports transactions from Xero using confirmed account mappings
-// Handles invoices, bank transactions and manual journals
+// Handles invoices (AUTHORISED/PAID only), bank transactions and manual journals
 
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
@@ -199,6 +199,10 @@ export async function GET(request: Request) {
     let totalLinesSkipped = 0;
 
     // ── 1. INVOICES ────────────────────────────────────────────
+    // Only pull AUTHORISED and PAID invoices — Draft/Voided excluded
+    // as they don't appear in the Xero P&L
+    // Line amounts kept as-is (not Math.abs) so credit note lines
+    // stay negative and reduce the turnover correctly
     let invoicePage = 1;
     let invoicesDone = false;
 
@@ -206,7 +210,7 @@ export async function GET(request: Request) {
       const invoicesRes = await xeroGet(
         `https://api.xero.com/api.xro/2.0/Invoices` +
           `?Type=ACCREC` +
-          `&Statuses=AUTHORISED,PAID` +
+          `&Statuses=AUTHORISED%2CPAID` +
           `&where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C1)%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
           `&page=${invoicePage}` +
           `&summaryOnly=false`
@@ -220,7 +224,6 @@ export async function GET(request: Request) {
       for (const invoice of invoices) {
         totalRecordsProcessed++;
         const date = parseXeroDate(invoice.Date || invoice.DateString) || new Date();
-        // Double-check date is in window
         if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
         const lines = invoice.LineItems || [];
 
@@ -228,7 +231,9 @@ export async function GET(request: Request) {
           const code = String(line.AccountCode || "").trim();
           const classification = accountMap.get(code);
           if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
-          const amount = safeNumber(line.LineAmount));
+
+          // Do NOT use Math.abs — credit note lines must stay negative
+          const amount = safeNumber(line.LineAmount);
           if (amount === 0) continue;
 
           importedLines.push({
@@ -252,10 +257,8 @@ export async function GET(request: Request) {
     }
 
     // ── 2. BANK TRANSACTIONS (receipts AND refunds) ────────────
-    // For BMA Leisure style businesses, Stripe and Booking.com receipts
-    // post directly to income accounts via RECEIVE bank transactions.
-    // Refunds post as SPEND transactions to the same income accounts.
-    // We fetch both and use negative amounts for SPEND to match the P&L.
+    // RECEIVE = income posting to income accounts
+    // SPEND on income accounts = refunds/deductions (negative)
     for (const txnType of ["RECEIVE", "SPEND"]) {
       let bankPage = 1;
       let bankDone = false;
@@ -290,7 +293,7 @@ export async function GET(request: Request) {
             const rawAmount = safeNumber(line.LineAmount ?? line.UnitAmount ?? 0);
             if (rawAmount === 0) continue;
 
-            // RECEIVE = positive income, SPEND = negative (refund/deduction)
+            // RECEIVE = positive income, SPEND = negative (refund)
             const amount = txnType === "SPEND"
               ? -Math.abs(rawAmount)
               : Math.abs(rawAmount);
@@ -317,9 +320,9 @@ export async function GET(request: Request) {
     }
 
     // ── 3. MANUAL JOURNALS ─────────────────────────────────────
-    // For businesses that record sales via EPOS journals (e.g. Tangerine Trees).
-    // Xero ignores date filters on ManualJournals so we filter in code.
-    // Only negative LineAmount on income accounts = income credit.
+    // For businesses that record sales via EPOS journals
+    // Xero ignores date filters on ManualJournals so we filter in code
+    // Only negative LineAmount on income accounts = income credit
     let journalPage = 1;
     let journalsDone = false;
 
@@ -336,7 +339,6 @@ export async function GET(request: Request) {
       for (const journal of journals) {
         const date = parseXeroDate(journal.Date || journal.DateString);
         if (!date) { totalLinesSkipped++; continue; }
-        // Filter by date in code — Xero ignores where clause on ManualJournals
         if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
 
         totalRecordsProcessed++;
@@ -406,12 +408,20 @@ export async function GET(request: Request) {
       const label = monthLabel(date);
 
       if (!buckets.has(key)) {
-        buckets.set(key, { month_label: label, standard_rated: 0, reduced_rated: 0, zero_rated: 0, exempt: 0, out_of_scope: 0 });
+        buckets.set(key, {
+          month_label: label,
+          standard_rated: 0,
+          reduced_rated: 0,
+          zero_rated: 0,
+          exempt: 0,
+          out_of_scope: 0,
+        });
       }
 
       const bucket = buckets.get(key)!;
       const classification = line.vat_classification as VatClassification;
-      // Amount can be negative for refunds — add directly (negative reduces the bucket)
+
+      // Amount can be negative for refunds/credit notes — adds correctly
       if (classification === "standard_rated") bucket.standard_rated += line.amount;
       else if (classification === "reduced_rated") bucket.reduced_rated += line.amount;
       else if (classification === "zero_rated") bucket.zero_rated += line.amount;
@@ -437,7 +447,8 @@ export async function GET(request: Request) {
     }
 
     const rollingTurnover = turnoverRows.reduce(
-      (sum, row) => sum + Number(row.standard_rated) + Number(row.reduced_rated) + Number(row.zero_rated),
+      (sum, row) =>
+        sum + Number(row.standard_rated) + Number(row.reduced_rated) + Number(row.zero_rated),
       0
     );
 
