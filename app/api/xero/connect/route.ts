@@ -35,7 +35,8 @@ export async function GET(request: Request) {
     `&client_id=${encodeURIComponent(xeroClientId)}` +
     `&redirect_uri=${encodeURIComponent(redirectUri)}` +
     `&scope=${encodeURIComponent(scope)}` +
-    `&state=${encodeURIComponent(clientId)}`;
+    `&state=${encodeURIComponent(clientId)}` +
+    `&prompt=login`;
 
   return NextResponse.redirect(xeroAuthorizeUrl);
 }
