@@ -4,12 +4,10 @@ import React, { useEffect, useState } from "react";
 import { createClient, type User } from "@supabase/supabase-js";
 import AccountMappings from "@/components/AccountMappings";
 
-// Maddock & Co brand colours:
+// Maddock & Co brand colours
 // Primary dark:  #343b46
 // Gold accent:   #c9af69
 // Light bg:      #f2f7f8
-// Near black:    #060606
-// Font: Open Sans
 
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
@@ -107,7 +105,6 @@ export default function VatDashboard() {
 
   const [months, setMonths] = useState<MonthRow[]>(getLastCompleted12Months());
 
-  // New client modal state
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [newClientName, setNewClientName] = useState("");
   const [newClientSector, setNewClientSector] = useState("");
@@ -145,25 +142,16 @@ export default function VatDashboard() {
     setSelectedClientId(client.id);
     setClientName(client.name);
     setSector(client.sector || "");
-    setMessage(`Editing ${client.name}`);
+    setMessage("");
     const baseMonths = getLastCompleted12Months();
-
     const { data: entries } = await supabase
       .from("turnover_entries")
       .select("month_label,standard_rated,reduced_rated,zero_rated,exempt,out_of_scope,source")
       .eq("client_id", client.id);
-
     const loadedMonths = baseMonths.map((month) => {
-      // Prefer xero source over manual — if xero data exists use it,
-      // otherwise fall back to manual entry
-      const xeroEntry = entries?.find(
-        (e) => e.month_label === month.month && e.source === "xero"
-      );
-      const manualEntry = entries?.find(
-        (e) => e.month_label === month.month && e.source === "manual"
-      );
+      const xeroEntry = entries?.find((e) => e.month_label === month.month && e.source === "xero");
+      const manualEntry = entries?.find((e) => e.month_label === month.month && e.source === "manual");
       const match = xeroEntry || manualEntry;
-
       return {
         month: month.month,
         standard: Number(match?.standard_rated || 0),
@@ -173,9 +161,15 @@ export default function VatDashboard() {
         out: Number(match?.out_of_scope || 0),
       };
     });
-
     setMonths(loadedMonths);
     setExpectedNext30Days(0);
+  }
+
+  function closeClient() {
+    setSelectedClientId(null);
+    setClientName("");
+    setMessage("");
+    setMonths(getLastCompleted12Months());
   }
 
   function refreshRollingPeriod() {
@@ -235,53 +229,28 @@ export default function VatDashboard() {
     setMonths(updated);
   }
 
-  // New client modal submit
   async function createNewClient() {
     setNewClientError("");
     if (!supabase) { setNewClientError("Supabase not connected."); return; }
     if (!user) { setNewClientError("Please sign in first."); return; }
     if (!newClientName.trim()) { setNewClientError("Please enter a client name."); return; }
-
     setNewClientSaving(true);
-
     try {
-      // Upsert user profile
-      const { error: profileError } = await supabase
-        .from("user_profiles")
-        .upsert({ id: user.id, email: user.email, role: "firm_admin" });
-      if (profileError) throw new Error(`Profile error: ${profileError.message}`);
-
-      // Create firm
-      const { data: firm, error: firmError } = await supabase
-        .from("firms")
-        .insert({ name: firmName, subscription_status: "trial" })
-        .select()
-        .single();
+      await supabase.from("user_profiles").upsert({ id: user.id, email: user.email, role: "firm_admin" });
+      const { data: firm, error: firmError } = await supabase.from("firms").insert({ name: firmName, subscription_status: "trial" }).select().single();
       if (firmError || !firm) throw new Error(`Firm error: ${firmError?.message}`);
-
-      // Firm access
       await supabase.from("firm_user_access").insert({ firm_id: firm.id, user_id: user.id, role: "firm_admin" });
-
-      // Create client
-      const { data: client, error: clientError } = await supabase
-        .from("clients")
-        .insert({ firm_id: firm.id, name: newClientName.trim(), sector: newClientSector.trim() || null })
-        .select()
-        .single();
+      const { data: client, error: clientError } = await supabase.from("clients").insert({ firm_id: firm.id, name: newClientName.trim(), sector: newClientSector.trim() || null }).select().single();
       if (clientError || !client) throw new Error(`Client error: ${clientError?.message}`);
-
-      // Close modal and open the new client
       setShowNewClientModal(false);
       setNewClientName("");
       setNewClientSector("");
       await loadSavedData();
       await openClient(client as SavedClient);
-      setMessage(`Client "${client.name}" created successfully. You can now connect Xero below.`);
-
+      setMessage(`Client "${client.name}" created. Connect Xero below to import their data.`);
     } catch (err) {
       setNewClientError(err instanceof Error ? err.message : "Something went wrong.");
     }
-
     setNewClientSaving(false);
   }
 
@@ -290,18 +259,10 @@ export default function VatDashboard() {
     if (!supabase) { setMessage("Supabase not connected."); return; }
     if (!user) { setMessage("Please sign in before saving."); return; }
     if (!clientName.trim()) { setMessage("Enter client name."); return; }
-    if (!selectedClientId) { setMessage("Please create a client first using the New Client button."); return; }
-
+    if (!selectedClientId) { setMessage("Please create a client first."); return; }
     setSaving(true);
-
-    const { error: clientUpdateError } = await supabase
-      .from("clients")
-      .update({ name: clientName, sector })
-      .eq("id", selectedClientId);
-    if (clientUpdateError) { setSaving(false); setMessage(`Client update failed: ${clientUpdateError.message}`); return; }
-
+    await supabase.from("clients").update({ name: clientName, sector }).eq("id", selectedClientId);
     await supabase.from("turnover_entries").delete().eq("client_id", selectedClientId).neq("source", "xero");
-
     const entries = months.map((month) => ({
       client_id: selectedClientId,
       month_label: month.month,
@@ -312,10 +273,7 @@ export default function VatDashboard() {
       out_of_scope: month.out,
       source: "manual",
     }));
-
-    const { error: turnoverError } = await supabase.from("turnover_entries").insert(entries);
-    if (turnoverError) { setSaving(false); setMessage(`Turnover save failed: ${turnoverError.message}`); return; }
-
+    await supabase.from("turnover_entries").insert(entries);
     const rollingTaxableTurnover = months.reduce((sum, m) => sum + m.standard + m.reduced + m.zero, 0);
     const forwardLookTriggered = expectedNext30Days > VAT_THRESHOLD;
     const risk =
@@ -324,16 +282,8 @@ export default function VatDashboard() {
       : rollingTaxableTurnover >= 0.9 * VAT_THRESHOLD ? "High Risk"
       : rollingTaxableTurnover >= 0.8 * VAT_THRESHOLD ? "Warning"
       : "Low Risk";
-
-    const { error: reviewError } = await supabase.from("vat_reviews").insert({
-      client_id: selectedClientId,
-      rolling_taxable_turnover: rollingTaxableTurnover,
-      expected_next_30_days: expectedNext30Days,
-      risk_status: risk,
-    });
-
+    await supabase.from("vat_reviews").insert({ client_id: selectedClientId, rolling_taxable_turnover: rollingTaxableTurnover, expected_next_30_days: expectedNext30Days, risk_status: risk });
     setSaving(false);
-    if (reviewError) { setMessage(`Review save failed: ${reviewError.message}`); return; }
     setMessage("Client updated successfully.");
     await loadSavedData();
   }
@@ -349,155 +299,147 @@ export default function VatDashboard() {
     : rollingTaxableTurnover >= 0.8 * VAT_THRESHOLD ? "Warning"
     : "Low Risk";
   const riskColour =
-    risk === "Registration Required" || risk === "Forward-Look Trigger" ? "text-red-700"
-    : risk === "High Risk" ? "text-orange-700"
-    : risk === "Warning" ? "text-yellow-700"
-    : "text-green-700";
+    risk === "Registration Required" || risk === "Forward-Look Trigger" ? "text-red-600"
+    : risk === "High Risk" ? "text-orange-600"
+    : risk === "Warning" ? "text-yellow-600"
+    : "text-green-600";
+  const riskBg =
+    risk === "Registration Required" || risk === "Forward-Look Trigger" ? "bg-red-50"
+    : risk === "High Risk" ? "bg-orange-50"
+    : risk === "Warning" ? "bg-yellow-50"
+    : "bg-green-50";
 
-  function latestReviewForClient(clientId: string) {
-    return savedReviews.find((r) => r.client_id === clientId);
-  }
-  function latestAlertForClient(clientId: string) {
-    return vatAlerts.find((a) => a.client_id === clientId);
-  }
-  function reviewsForSelectedClient() {
-    if (!selectedClientId) return [];
-    return savedReviews.filter((r) => r.client_id === selectedClientId);
-  }
-  function alertsForSelectedClient() {
-    if (!selectedClientId) return [];
-    return vatAlerts.filter((a) => a.client_id === selectedClientId);
-  }
-  function connectionForClient(clientId: string, provider: "xero" | "quickbooks" | "freeagent") {
-    return accountingConnections.find((c) => c.client_id === clientId && c.provider === provider);
-  }
+  function latestReviewForClient(clientId: string) { return savedReviews.find((r) => r.client_id === clientId); }
+  function latestAlertForClient(clientId: string) { return vatAlerts.find((a) => a.client_id === clientId); }
+  function reviewsForSelectedClient() { if (!selectedClientId) return []; return savedReviews.filter((r) => r.client_id === selectedClientId); }
+  function alertsForSelectedClient() { if (!selectedClientId) return []; return vatAlerts.filter((a) => a.client_id === selectedClientId); }
+  function connectionForClient(clientId: string, provider: "xero" | "quickbooks" | "freeagent") { return accountingConnections.find((c) => c.client_id === clientId && c.provider === provider); }
 
   const selectedClientReviews = reviewsForSelectedClient();
   const selectedClientAlerts = alertsForSelectedClient();
-  const rollingPeriod = months.length > 0 ? `${months[0].month} to ${months[months.length - 1].month}` : "";
   const selectedXeroConnection = selectedClientId ? connectionForClient(selectedClientId, "xero") : undefined;
+  const rollingPeriod = months.length > 0 ? `${months[0].month} – ${months[months.length - 1].month}` : "";
 
+  // ── LOGIN SCREEN ─────────────────────────────────────────────
   if (!user) {
     return (
-      <main className="min-h-screen bg-[#f2f7f8] p-6">
+      <main className="min-h-screen bg-[#f2f7f8] p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
         <div className="mx-auto max-w-xl">
           <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
-            <p>Provided by Maddock & Co.</p>
-            <h1 className="mt-2 text-4xl font-bold">VAT Checker Login</h1>
-            <p className="mt-3 text-[#f2f7f8]">Secure access for accounting firms and client users.</p>
+            <p className="text-sm text-[#c9af69] font-semibold tracking-wide uppercase">Maddock & Co.</p>
+            <h1 className="mt-2 text-4xl font-bold">VAT Checker</h1>
+            <p className="mt-3 text-slate-300">Secure access for accounting firms and client users.</p>
           </div>
-          <div className="rounded-3xl bg-white p-6 shadow">
-            <div className="mb-4 flex gap-2 rounded-xl bg-slate-100 p-1">
-              <button onClick={() => setAuthMode("signin")} className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold ${authMode === "signin" ? "bg-white shadow" : "text-slate-600"}`}>Sign in</button>
-              <button onClick={() => setAuthMode("signup")} className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold ${authMode === "signup" ? "bg-white shadow" : "text-slate-600"}`}>Create account</button>
+          <div className="rounded-3xl bg-white p-6 shadow-sm">
+            <div className="mb-4 flex gap-2 rounded-xl bg-[#f2f7f8] p-1">
+              <button onClick={() => setAuthMode("signin")} className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${authMode === "signin" ? "bg-white shadow text-[#343b46]" : "text-slate-500"}`}>Sign in</button>
+              <button onClick={() => setAuthMode("signup")} className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${authMode === "signup" ? "bg-white shadow text-[#343b46]" : "text-slate-500"}`}>Create account</button>
             </div>
-            <label className="block text-sm font-medium">Email address</label>
-            <input type="email" className="mb-4 mt-1 w-full rounded-xl border p-3" value={email} onChange={(e) => setEmail(e.target.value)} />
-            <label className="block text-sm font-medium">Password</label>
-            <input type="password" className="mb-4 mt-1 w-full rounded-xl border p-3" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button onClick={authMode === "signin" ? signIn : signUp} className="w-full rounded-xl bg-[#343b46] px-4 py-3 font-semibold text-white">
+            <label className="block text-sm font-semibold text-[#343b46]">Email address</label>
+            <input type="email" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <label className="block text-sm font-semibold text-[#343b46]">Password</label>
+            <input type="password" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <button onClick={authMode === "signin" ? signIn : signUp} className="w-full rounded-xl bg-[#343b46] px-4 py-3 font-semibold text-white hover:bg-[#2a303a] transition-colors">
               {authMode === "signin" ? "Sign in" : "Create account"}
             </button>
-            {loginMessage && <p className="mt-4 rounded-xl bg-slate-100 p-3 text-sm">{loginMessage}</p>}
+            {loginMessage && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{loginMessage}</p>}
           </div>
         </div>
       </main>
     );
   }
 
+  // ── MAIN APP ─────────────────────────────────────────────────
   return (
-    <main className="min-h-screen bg-[#f2f7f8] p-6">
+    <main className="min-h-screen bg-[#f2f7f8] p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
       <div className="mx-auto max-w-7xl">
 
-        {/* ── New Client Modal ─────────────────────────────── */}
+        {/* New Client Modal */}
         {showNewClientModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
               <div className="rounded-t-2xl bg-[#343b46] px-6 py-5 text-white">
+                <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-wide mb-1">Maddock & Co. VAT Checker</p>
                 <h2 className="text-xl font-bold">Add new client</h2>
-                <p className="mt-1 text-sm text-[#e8eef0]">Enter the client details below. You can connect Xero after saving.</p>
+                <p className="mt-1 text-sm text-slate-300">Enter the client details below.</p>
               </div>
               <div className="p-6">
                 <div className="mb-4">
-                  <label className="block text-sm font-semibold text-slate-700">Client name <span className="text-red-500">*</span></label>
-                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]/20" placeholder="e.g. BMA Leisure Ltd" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
+                  <label className="block text-sm font-semibold text-[#343b46]">Client name <span className="text-red-500">*</span></label>
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. BMA Leisure Ltd" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
                 </div>
                 <div className="mb-4">
-                  <label className="block text-sm font-semibold text-slate-700">Sector <span className="text-slate-400 font-normal">(optional)</span></label>
-                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]/20" placeholder="e.g. Hospitality, Retail, Construction" value={newClientSector} onChange={(e) => setNewClientSector(e.target.value)} />
+                  <label className="block text-sm font-semibold text-[#343b46]">Sector <span className="text-slate-400 font-normal">(optional)</span></label>
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. Hospitality, Retail, Construction" value={newClientSector} onChange={(e) => setNewClientSector(e.target.value)} />
                 </div>
-                <div className="mb-6 rounded-xl bg-[#f2f7f8] p-3 text-sm text-[#343b46]">
-                  <strong>Next step:</strong> After saving, open the client and click <strong>Connect Xero</strong> to link their accounting data.
+                <div className="mb-6 rounded-xl bg-[#f2f7f8] p-3 text-sm text-[#343b46] border-l-4 border-[#c9af69]">
+                  <strong>Next step:</strong> After saving, open the client and click <strong>Connect Xero</strong>.
                 </div>
                 {newClientError && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{newClientError}</div>}
                 <div className="flex gap-3">
-                  <button onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientError(""); }} className="flex-1 rounded-xl border border-[#c9af69] px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-slate-50">Cancel</button>
-                  <button onClick={createNewClient} disabled={newClientSaving || !newClientName.trim()} className="flex-1 rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{newClientSaving ? "Saving..." : "Save client"}</button>
+                  <button onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientError(""); }} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8]">Cancel</button>
+                  <button onClick={createNewClient} disabled={newClientSaving || !newClientName.trim()} className="flex-1 rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white hover:bg-[#2a303a] disabled:opacity-50">
+                    {newClientSaving ? "Saving..." : "Save client"}
+                  </button>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* ── Header ───────────────────────────────────────── */}
+        {/* Header */}
         <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-[#c9af69] text-sm">Provided by Maddock & Co.</p>
+              <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-widest">Maddock & Co.</p>
               <h1 className="mt-1 text-4xl font-bold">VAT Checker</h1>
               {selectedClientId ? (
-                <p className="mt-2 text-[#f2f7f8]">
-                  Viewing: <span className="font-semibold text-white">{clientName}</span>
-                </p>
+                <p className="mt-2 text-slate-300">Viewing: <span className="font-semibold text-white">{clientName}</span></p>
               ) : (
-                <p className="mt-2 text-[#f2f7f8]">Signed in as {user.email}</p>
+                <p className="mt-2 text-slate-300">{user.email} · Rolling period: {rollingPeriod}</p>
               )}
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-2 flex-wrap">
               {selectedClientId && (
-                <button
-                  onClick={() => { setSelectedClientId(null); setClientName(""); setMessage(""); setMonths(getLastCompleted12Months()); }}
-                  className="rounded-xl bg-white/20 px-4 py-2 text-sm font-semibold text-white ring-1 ring-white/30 hover:bg-white/30"
-                >
-                  ← Back to all clients
+                <button onClick={closeClient} className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors">
+                  ← All clients
                 </button>
               )}
-              <button onClick={signOut} className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-white/20">Sign out</button>
+              <button onClick={signOut} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
+                Sign out
+              </button>
             </div>
           </div>
         </div>
 
-        {/* ══════════════════════════════════════════════════════
-            MAIN DASHBOARD VIEW — shown when no client is open
-        ══════════════════════════════════════════════════════ */}
+        {/* ══ MAIN DASHBOARD — no client selected ══ */}
         {!selectedClientId && (
           <>
-            {/* VAT alerts across all clients */}
             {vatAlerts.length > 0 && (
-              <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow">
-                <h2 className="text-xl font-bold text-orange-900">⚠️ VAT alerts</h2>
-                <p className="mt-1 text-sm text-orange-800">Clients approaching or exceeding the VAT registration threshold.</p>
+              <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+                <h2 className="text-lg font-bold text-orange-900">⚠️ VAT Alerts</h2>
+                <p className="mt-1 text-sm text-orange-700">Clients approaching or exceeding the VAT registration threshold.</p>
                 <div className="mt-4 overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b border-orange-200 text-left">
-                        <th className="p-2">Client</th>
-                        <th className="p-2">Alert</th>
-                        <th className="p-2">% threshold</th>
-                        <th className="p-2">Message</th>
-                        <th className="p-2">Date</th>
+                      <tr className="border-b border-orange-200 text-left text-xs uppercase tracking-wide text-orange-700">
+                        <th className="pb-2 p-2">Client</th>
+                        <th className="pb-2 p-2">Alert</th>
+                        <th className="pb-2 p-2">% Threshold</th>
+                        <th className="pb-2 p-2">Message</th>
+                        <th className="pb-2 p-2">Date</th>
                       </tr>
                     </thead>
                     <tbody>
                       {vatAlerts.slice(0, 10).map((alert) => {
                         const alertClient = savedClients.find((c) => c.id === alert.client_id);
                         return (
-                          <tr key={alert.id} className="border-b border-orange-100 hover:bg-orange-100 cursor-pointer" onClick={() => { const c = savedClients.find(x => x.id === alert.client_id); if (c) openClient(c); }}>
-                            <td className="p-2 font-medium">{alertClient?.name || "Unknown"}</td>
-                            <td className="p-2 font-semibold">{alert.alert_type}</td>
+                          <tr key={alert.id} className="border-b border-orange-100 hover:bg-orange-100 cursor-pointer transition-colors" onClick={() => { const c = savedClients.find((x) => x.id === alert.client_id); if (c) openClient(c); }}>
+                            <td className="p-2 font-semibold text-[#343b46]">{alertClient?.name || "Unknown"}</td>
+                            <td className="p-2 font-bold text-orange-700">{alert.alert_type}</td>
                             <td className="p-2">{Number(alert.threshold_percentage || 0).toFixed(1)}%</td>
                             <td className="p-2">{alert.message}</td>
-                            <td className="p-2">{new Date(alert.created_at).toLocaleString("en-GB")}</td>
+                            <td className="p-2 text-xs text-slate-500">{new Date(alert.created_at).toLocaleString("en-GB")}</td>
                           </tr>
                         );
                       })}
@@ -507,37 +449,42 @@ export default function VatDashboard() {
               </div>
             )}
 
-            {/* Client list */}
-            <div className="mb-6 rounded-2xl bg-white p-6 shadow">
-              <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div className="rounded-2xl bg-white p-6 shadow-sm">
+              <div className="mb-5 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
                 <div>
-                  <h2 className="text-xl font-bold">Client dashboard</h2>
-                  <p className="text-sm text-slate-500">Click a client to open their full VAT details.</p>
+                  <h2 className="text-xl font-bold text-[#343b46]">Client Dashboard</h2>
+                  <p className="text-sm text-slate-500">Click a client to view their full VAT position.</p>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white">+ New client</button>
-                  <button onClick={loadSavedData} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46]">{loadingSaved ? "Loading..." : "Refresh"}</button>
+                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors">
+                    + New client
+                  </button>
+                  <button onClick={loadSavedData} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-slate-200 transition-colors">
+                    {loadingSaved ? "Loading..." : "Refresh"}
+                  </button>
                 </div>
               </div>
 
               {savedClients.length === 0 ? (
-                <div className="rounded-xl bg-slate-50 p-8 text-center">
-                  <p className="text-slate-500">No clients yet.</p>
-                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="mt-3 rounded-xl bg-[#343b46] px-5 py-2 text-sm font-semibold text-white">Add your first client</button>
+                <div className="rounded-xl bg-[#f2f7f8] p-10 text-center">
+                  <p className="text-slate-500 mb-3">No clients yet. Add your first client to get started.</p>
+                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="rounded-xl bg-[#343b46] px-5 py-2 text-sm font-semibold text-white hover:bg-[#2a303a]">
+                    Add your first client
+                  </button>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b text-left">
-                        <th className="p-2">Client</th>
-                        <th className="p-2">Sector</th>
-                        <th className="p-2">Latest turnover</th>
-                        <th className="p-2">% threshold</th>
-                        <th className="p-2">Risk</th>
-                        <th className="p-2">Alert</th>
-                        <th className="p-2">Xero</th>
-                        <th className="p-2">Action</th>
+                      <tr className="border-b text-left text-xs uppercase tracking-wide text-slate-400">
+                        <th className="pb-3 p-2">Client</th>
+                        <th className="pb-3 p-2">Sector</th>
+                        <th className="pb-3 p-2">Turnover</th>
+                        <th className="pb-3 p-2">% Threshold</th>
+                        <th className="pb-3 p-2">Risk</th>
+                        <th className="pb-3 p-2">Alert</th>
+                        <th className="pb-3 p-2">Xero</th>
+                        <th className="pb-3 p-2"></th>
                       </tr>
                     </thead>
                     <tbody>
@@ -549,29 +496,38 @@ export default function VatDashboard() {
                         const xeroConn = connectionForClient(c.id, "xero");
                         const rowRisk = review?.risk_status || "No review";
                         const rowRiskColour =
-                          turnover >= VAT_THRESHOLD ? "text-red-700"
-                          : turnover >= VAT_THRESHOLD * 0.9 ? "text-orange-700"
-                          : turnover >= VAT_THRESHOLD * 0.8 ? "text-yellow-700"
-                          : "text-green-700";
+                          turnover >= VAT_THRESHOLD ? "text-red-600 font-bold"
+                          : turnover >= VAT_THRESHOLD * 0.9 ? "text-orange-600 font-semibold"
+                          : turnover >= VAT_THRESHOLD * 0.8 ? "text-yellow-600 font-semibold"
+                          : "text-green-600";
                         return (
-                          <tr key={c.id} className="border-b hover:bg-slate-50 cursor-pointer" onClick={() => openClient(c)}>
-                            <td className="p-2 font-medium text-[#343b46]">{c.name}</td>
-                            <td className="p-2">{c.sector || "-"}</td>
-                            <td className="p-2">£{turnover.toLocaleString()}</td>
-                            <td className="p-2">{percent.toFixed(1)}%</td>
-                            <td className={`p-2 font-semibold ${rowRiskColour}`}>{rowRisk}</td>
+                          <tr key={c.id} className="border-b hover:bg-[#f2f7f8] cursor-pointer transition-colors" onClick={() => openClient(c)}>
+                            <td className="p-2 font-semibold text-[#343b46]">{c.name}</td>
+                            <td className="p-2 text-slate-500">{c.sector || "—"}</td>
+                            <td className="p-2 font-semibold">£{turnover.toLocaleString()}</td>
+                            <td className="p-2">
+                              <div className="flex items-center gap-2">
+                                <div className="h-2 w-20 rounded-full bg-slate-100">
+                                  <div className={`h-2 rounded-full ${percent >= 100 ? "bg-red-500" : percent >= 80 ? "bg-yellow-400" : "bg-green-400"}`} style={{ width: `${Math.min(percent, 100)}%` }} />
+                                </div>
+                                <span className="text-xs">{percent.toFixed(0)}%</span>
+                              </div>
+                            </td>
+                            <td className={`p-2 ${rowRiskColour}`}>{rowRisk}</td>
                             <td className="p-2">
                               {latestAlert
-                                ? <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">{latestAlert.alert_type}</span>
-                                : <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">Clear</span>}
+                                ? <span className="rounded-full bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700">{latestAlert.alert_type}</span>
+                                : <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">Clear</span>}
                             </td>
                             <td className="p-2">
                               {xeroConn
-                                ? <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">Connected</span>
-                                : <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">Not connected</span>}
+                                ? <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">Connected</span>
+                                : <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">Not connected</span>}
                             </td>
                             <td className="p-2">
-                              <button onClick={(e) => { e.stopPropagation(); openClient(c); }} className="rounded-lg bg-[#343b46] px-3 py-1 text-sm font-semibold text-white hover:bg-[#2d3340]">Open</button>
+                              <button onClick={(e) => { e.stopPropagation(); openClient(c); }} className="rounded-lg bg-[#343b46] px-3 py-1 text-xs font-semibold text-white hover:bg-[#2a303a] transition-colors">
+                                Open →
+                              </button>
                             </td>
                           </tr>
                         );
@@ -584,56 +540,57 @@ export default function VatDashboard() {
           </>
         )}
 
-        {/* ══════════════════════════════════════════════════════
-            CLIENT DETAIL VIEW — shown when a client is open
-        ══════════════════════════════════════════════════════ */}
+        {/* ══ CLIENT DETAIL VIEW — client selected ══ */}
         {selectedClientId && (
           <>
-            {/* VAT summary cards for this client */}
+            {/* Summary cards */}
             <div className="mb-6 grid gap-4 md:grid-cols-5">
-              {[
-                { label: "Rolling taxable turnover", value: `£${rollingTaxableTurnover.toLocaleString()}` },
-                { label: "Threshold used", value: `${thresholdUsed.toFixed(1)}%` },
-                { label: "Remaining to threshold", value: `£${thresholdRemaining.toLocaleString()}` },
-                { label: "30-day forecast", value: `£${expectedNext30Days.toLocaleString()}` },
-              ].map((card) => (
-                <div key={card.label} className="rounded-xl bg-white p-4 shadow">
-                  <p className="text-sm text-gray-500">{card.label}</p>
-                  <p className="text-2xl font-bold">{card.value}</p>
+              <div className="rounded-xl bg-white p-4 shadow-sm border-t-4 border-[#c9af69]">
+                <p className="text-xs text-slate-400 uppercase tracking-wide">Rolling taxable turnover</p>
+                <p className="mt-1 text-2xl font-bold text-[#343b46]">£{rollingTaxableTurnover.toLocaleString()}</p>
+              </div>
+              <div className="rounded-xl bg-white p-4 shadow-sm">
+                <p className="text-xs text-slate-400 uppercase tracking-wide">Threshold used</p>
+                <p className="mt-1 text-2xl font-bold text-[#343b46]">{thresholdUsed.toFixed(1)}%</p>
+                <div className="mt-2 h-2 w-full rounded-full bg-slate-100">
+                  <div className={`h-2 rounded-full transition-all ${thresholdUsed >= 100 ? "bg-red-500" : thresholdUsed >= 80 ? "bg-yellow-400" : "bg-green-400"}`} style={{ width: `${Math.min(thresholdUsed, 100)}%` }} />
                 </div>
-              ))}
-              <div className={`rounded-xl p-4 shadow ${
-                risk === "Registration Required" || risk === "Forward-Look Trigger" ? "bg-red-50"
-                : risk === "High Risk" ? "bg-orange-50"
-                : risk === "Warning" ? "bg-yellow-50"
-                : "bg-green-50"
-              }`}>
-                <p className="text-sm text-gray-500">VAT risk</p>
-                <p className={`text-2xl font-bold ${riskColour}`}>{risk}</p>
+              </div>
+              <div className="rounded-xl bg-white p-4 shadow-sm">
+                <p className="text-xs text-slate-400 uppercase tracking-wide">Remaining</p>
+                <p className="mt-1 text-2xl font-bold text-[#343b46]">£{thresholdRemaining.toLocaleString()}</p>
+              </div>
+              <div className="rounded-xl bg-white p-4 shadow-sm">
+                <p className="text-xs text-slate-400 uppercase tracking-wide">30-day forecast</p>
+                <p className="mt-1 text-2xl font-bold text-[#343b46]">£{expectedNext30Days.toLocaleString()}</p>
+              </div>
+              <div className={`rounded-xl p-4 shadow-sm border-t-4 ${risk === "Registration Required" || risk === "Forward-Look Trigger" ? "border-red-500 bg-red-50" : risk === "High Risk" ? "border-orange-400 bg-orange-50" : risk === "Warning" ? "border-yellow-400 bg-yellow-50" : "border-green-400 bg-green-50"}`}>
+                <p className="text-xs text-slate-400 uppercase tracking-wide">VAT Risk</p>
+                <p className={`mt-1 text-xl font-bold ${riskColour}`}>{risk}</p>
               </div>
             </div>
 
             {/* Client alerts */}
             {selectedClientAlerts.length > 0 && (
-              <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow">
-                <h2 className="text-xl font-bold text-orange-900">⚠️ Alerts — {clientName}</h2>
-                <div className="mt-4 overflow-x-auto">
+              <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
+                <h2 className="font-bold text-orange-900">⚠️ Alerts — {clientName}</h2>
+                <div className="mt-3 overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b border-orange-200 text-left">
-                        <th className="p-2">Alert type</th>
-                        <th className="p-2">% threshold</th>
-                        <th className="p-2">Message</th>
-                        <th className="p-2">Created</th>
+                      <tr className="border-b border-orange-200 text-left text-xs uppercase tracking-wide text-orange-600">
+                        <th className="pb-2 p-2">Alert</th>
+                        <th className="pb-2 p-2">%</th>
+                        <th className="pb-2 p-2">Message</th>
+                        <th className="pb-2 p-2">Date</th>
                       </tr>
                     </thead>
                     <tbody>
                       {selectedClientAlerts.map((alert) => (
                         <tr key={alert.id} className="border-b border-orange-100">
-                          <td className="p-2 font-semibold">{alert.alert_type}</td>
+                          <td className="p-2 font-bold text-orange-700">{alert.alert_type}</td>
                           <td className="p-2">{Number(alert.threshold_percentage || 0).toFixed(1)}%</td>
                           <td className="p-2">{alert.message}</td>
-                          <td className="p-2">{new Date(alert.created_at).toLocaleString("en-GB")}</td>
+                          <td className="p-2 text-xs text-slate-500">{new Date(alert.created_at).toLocaleString("en-GB")}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -643,24 +600,24 @@ export default function VatDashboard() {
             )}
 
             {/* Xero connection */}
-            <div className="mb-6 rounded-2xl bg-white p-6 shadow">
-              <h2 className="text-xl font-bold">Xero connection</h2>
+            <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-[#343b46]">Xero Connection</h2>
               <p className="mt-1 text-sm text-slate-500">Connect Xero and import income automatically.</p>
-              <div className="mt-4 rounded-2xl border bg-slate-50 p-4">
+              <div className="mt-4 rounded-xl border border-slate-100 bg-[#f2f7f8] p-4">
                 <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
                   <div>
-                    <h3 className="font-semibold">Xero</h3>
-                    <p className="text-sm text-slate-600">
+                    <p className="font-semibold text-[#343b46]">Xero</p>
+                    <p className="text-sm text-slate-500 mt-1">
                       {selectedXeroConnection
-                        ? `Connected on ${new Date(selectedXeroConnection.connected_at).toLocaleDateString("en-GB")}`
-                        : "Not connected. Make sure you are logged into the correct Xero organisation before connecting."}
+                        ? `✓ Connected on ${new Date(selectedXeroConnection.connected_at).toLocaleDateString("en-GB")}`
+                        : "Not connected. Make sure you are logged into the correct Xero organisation first."}
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={connectXero} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white">
+                    <button onClick={connectXero} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors">
                       {selectedXeroConnection ? "Reconnect Xero" : "Connect Xero"}
                     </button>
-                    <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-[#c9af69] text-[#343b46] font-semibold px-4 py-2 text-sm disabled:opacity-50">
+                    <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
                       {importingXero ? "Importing..." : "Import from Xero"}
                     </button>
                   </div>
@@ -674,28 +631,28 @@ export default function VatDashboard() {
             </div>
 
             {/* VAT review history */}
-            <div className="mb-6 rounded-2xl bg-white p-6 shadow">
-              <h2 className="text-xl font-bold">VAT review history</h2>
+            <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-[#343b46]">VAT Review History</h2>
               {selectedClientReviews.length === 0 ? (
-                <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">No VAT review history yet.</p>
+                <p className="mt-4 rounded-xl bg-[#f2f7f8] p-4 text-sm text-slate-500">No VAT review history yet.</p>
               ) : (
                 <div className="mt-4 overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="border-b text-left">
-                        <th className="p-2">Review date</th>
-                        <th className="p-2">Taxable turnover</th>
-                        <th className="p-2">Risk status</th>
-                        <th className="p-2">Version</th>
+                      <tr className="border-b text-left text-xs uppercase tracking-wide text-slate-400">
+                        <th className="pb-2 p-2">Review date</th>
+                        <th className="pb-2 p-2">Taxable turnover</th>
+                        <th className="pb-2 p-2">Risk status</th>
+                        <th className="pb-2 p-2">Version</th>
                       </tr>
                     </thead>
                     <tbody>
                       {selectedClientReviews.map((review, index) => (
-                        <tr key={review.id} className={index === 0 ? "border-b bg-[#f2f7f8]" : "border-b"}>
-                          <td className="p-2">{new Date(review.created_at).toLocaleString("en-GB")}</td>
-                          <td className="p-2 font-semibold">£{Number(review.rolling_taxable_turnover).toLocaleString()}</td>
+                        <tr key={review.id} className={`border-b transition-colors ${index === 0 ? "bg-[#f2f7f8]" : "hover:bg-slate-50"}`}>
+                          <td className="p-2 text-slate-600">{new Date(review.created_at).toLocaleString("en-GB")}</td>
+                          <td className="p-2 font-bold text-[#343b46]">£{Number(review.rolling_taxable_turnover).toLocaleString()}</td>
                           <td className="p-2">{review.risk_status}</td>
-                          <td className="p-2">{index === 0 ? "Latest" : `Previous ${index}`}</td>
+                          <td className="p-2 text-xs text-slate-400">{index === 0 ? "Latest" : `Previous ${index}`}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -706,459 +663,71 @@ export default function VatDashboard() {
 
             {/* Manual turnover entry */}
             <div className="mb-6 grid gap-6 md:grid-cols-2">
-              <div className="rounded-2xl bg-white p-6 shadow">
-                <h2 className="mb-3 font-bold">Firm</h2>
-                <input className="w-full rounded border p-2" value={firmName} onChange={(e) => setFirmName(e.target.value)} />
+              <div className="rounded-2xl bg-white p-6 shadow-sm">
+                <h2 className="mb-3 font-bold text-[#343b46]">Firm</h2>
+                <input className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={firmName} onChange={(e) => setFirmName(e.target.value)} />
               </div>
-              <div className="rounded-2xl bg-white p-6 shadow">
-                <h2 className="mb-3 font-bold">Client details</h2>
-                <input className="mb-3 w-full rounded border p-2" placeholder="Client name" value={clientName} onChange={(e) => setClientName(e.target.value)} />
-                <input className="mb-3 w-full rounded border p-2" placeholder="Sector" value={sector} onChange={(e) => setSector(e.target.value)} />
-                <label className="block text-sm font-medium">Expected taxable turnover in next 30 days</label>
-                <input type="number" className="mt-1 w-full rounded border p-2" value={expectedNext30Days} onChange={(e) => setExpectedNext30Days(Number(e.target.value || 0))} />
+              <div className="rounded-2xl bg-white p-6 shadow-sm">
+                <h2 className="mb-3 font-bold text-[#343b46]">Client Details</h2>
+                <input className="mb-3 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" placeholder="Client name" value={clientName} onChange={(e) => setClientName(e.target.value)} />
+                <input className="mb-3 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" placeholder="Sector" value={sector} onChange={(e) => setSector(e.target.value)} />
+                <label className="block text-sm font-semibold text-[#343b46]">Expected taxable turnover in next 30 days</label>
+                <input type="number" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={expectedNext30Days} onChange={(e) => setExpectedNext30Days(Number(e.target.value || 0))} />
               </div>
             </div>
 
             <div className="mb-3 flex justify-end">
-              <button onClick={refreshRollingPeriod} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46]">Refresh 12-month period</button>
+              <button onClick={refreshRollingPeriod} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-slate-200 transition-colors">
+                Refresh 12-month period
+              </button>
             </div>
 
-            <div className="overflow-x-auto rounded-2xl bg-white p-6 shadow">
+            <div className="overflow-x-auto rounded-2xl bg-white p-6 shadow-sm">
               <table className="w-full text-sm">
                 <thead>
-                  <tr>
-                    <th className="p-2 text-left">Month</th>
-                    <th className="p-2">Standard-rated</th>
-                    <th className="p-2">Reduced-rated</th>
-                    <th className="p-2">Zero-rated</th>
-                    <th className="p-2">Exempt</th>
-                    <th className="p-2">Out of scope</th>
-                    <th className="p-2">Taxable total</th>
+                  <tr className="border-b text-xs uppercase tracking-wide text-slate-400">
+                    <th className="pb-3 p-2 text-left">Month</th>
+                    <th className="pb-3 p-2">Standard-rated</th>
+                    <th className="pb-3 p-2">Reduced-rated</th>
+                    <th className="pb-3 p-2">Zero-rated</th>
+                    <th className="pb-3 p-2">Exempt</th>
+                    <th className="pb-3 p-2">Out of scope</th>
+                    <th className="pb-3 p-2">Taxable total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {months.map((month, index) => (
-                    <tr key={month.month} className="border-b">
-                      <td className="p-2 font-medium">{month.month}</td>
+                    <tr key={month.month} className="border-b hover:bg-[#f2f7f8] transition-colors">
+                      <td className="p-2 font-semibold text-[#343b46]">{month.month}</td>
                       {(["standard", "reduced", "zero", "exempt", "out"] as VatField[]).map((field) => (
                         <td key={field} className="p-2">
-                          <input type="number" className="w-28 rounded border p-2 text-sm" value={month[field]} onChange={(e) => updateValue(index, field, Number(e.target.value))} />
+                          <input type="number" className="w-28 rounded-xl border border-slate-200 p-2 text-sm focus:border-[#c9af69] focus:outline-none text-center" value={month[field]} onChange={(e) => updateValue(index, field, Number(e.target.value))} />
                         </td>
                       ))}
-                      <td className="p-2 font-semibold text-[#343b46]">£{(month.standard + month.reduced + month.zero).toLocaleString()}</td>
+                      <td className="p-2 font-bold text-[#343b46]">£{(month.standard + month.reduced + month.zero).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
               </table>
             </div>
 
-            <div className="mt-4 rounded-2xl bg-white p-5 text-sm text-slate-700 shadow">
-              <strong>VAT logic:</strong> Standard-rated, reduced-rated and zero-rated income are included in taxable turnover. Exempt and out-of-scope income are excluded from the VAT registration threshold calculation.
+            <div className="mt-4 rounded-2xl bg-white p-5 text-sm text-slate-500 shadow-sm border-l-4 border-[#c9af69]">
+              <strong className="text-[#343b46]">VAT logic:</strong> Standard-rated, reduced-rated and zero-rated income are included in taxable turnover. Exempt and out-of-scope income are excluded from the VAT registration threshold calculation.
             </div>
 
-            <div className="mt-6 flex gap-3">
-              <button onClick={saveAll} className="rounded-xl bg-[#343b46] px-6 py-3 font-semibold text-white disabled:opacity-50" disabled={saving}>
+            <div className="mt-6 flex gap-3 flex-wrap">
+              <button onClick={saveAll} disabled={saving} className="rounded-xl bg-[#343b46] px-6 py-3 font-semibold text-white hover:bg-[#2a303a] transition-colors disabled:opacity-50">
                 {saving ? "Saving..." : "Save VAT Review"}
               </button>
-              <button
-                onClick={() => { setSelectedClientId(null); setClientName(""); setMessage(""); setMonths(getLastCompleted12Months()); }}
-                className="rounded-xl border border-[#c9af69] px-6 py-3 font-semibold text-[#343b46] hover:bg-slate-50"
-              >
+              <button onClick={closeClient} className="rounded-xl border border-[#c9af69] px-6 py-3 font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors">
                 ← Back to all clients
               </button>
             </div>
 
-            {message && <p className="mt-4 rounded-xl bg-slate-100 p-3 text-sm">{message}</p>}
+            {message && <p className="mt-4 rounded-xl bg-[#f2f7f8] border-l-4 border-[#c9af69] p-3 text-sm text-[#343b46]">{message}</p>}
           </>
         )}
 
-      </div>
-    </main>
-  );
-}
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-            <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
-              {/* Modal header */}
-              <div className="rounded-t-2xl bg-[#343b46] px-6 py-5 text-white">
-                <h2 className="text-xl font-bold">Add new client</h2>
-                <p className="mt-1 text-sm text-[#e8eef0]">Enter the client details below. You can connect Xero after saving.</p>
-              </div>
-
-              {/* Modal body */}
-              <div className="p-6">
-                <div className="mb-4">
-                  <label className="block text-sm font-semibold text-slate-700">Client name <span className="text-red-500">*</span></label>
-                  <input
-                    type="text"
-                    className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]/20"
-                    placeholder="e.g. BMA Leisure Ltd"
-                    value={newClientName}
-                    onChange={(e) => setNewClientName(e.target.value)}
-                    autoFocus
-                  />
-                </div>
-
-                <div className="mb-4">
-                  <label className="block text-sm font-semibold text-slate-700">Sector <span className="text-slate-400 font-normal">(optional)</span></label>
-                  <input
-                    type="text"
-                    className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]/20"
-                    placeholder="e.g. Hospitality, Retail, Construction"
-                    value={newClientSector}
-                    onChange={(e) => setNewClientSector(e.target.value)}
-                  />
-                </div>
-
-                <div className="mb-6 rounded-xl bg-[#f2f7f8] p-3 text-sm text-[#343b46]">
-                  <strong>Next step:</strong> After saving, open the client and click <strong>Connect Xero</strong> to link their accounting data.
-                </div>
-
-                {newClientError && (
-                  <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">
-                    {newClientError}
-                  </div>
-                )}
-
-                <div className="flex gap-3">
-                  <button
-                    onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientError(""); }}
-                    className="flex-1 rounded-xl border border-[#c9af69] px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-slate-50"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    onClick={createNewClient}
-                    disabled={newClientSaving || !newClientName.trim()}
-                    className="flex-1 rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
-                  >
-                    {newClientSaving ? "Saving..." : "Save client"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Header ───────────────────────────────────────── */}
-        <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <p>Provided by Maddock & Co.</p>
-              <h1 className="mt-2 text-4xl font-bold">VAT Checker</h1>
-              <p className="mt-2 text-[#f2f7f8]">Signed in as {user.email}</p>
-              <p className="mt-1 text-sm text-[#f2f7f8]">Rolling period: {rollingPeriod}</p>
-            </div>
-            <button onClick={signOut} className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-white/20">Sign out</button>
-          </div>
-        </div>
-
-        {/* ── Summary cards ────────────────────────────────── */}
-        <div className="mb-6 grid gap-6 md:grid-cols-5">
-          {[
-            { label: "Rolling taxable turnover", value: `£${rollingTaxableTurnover.toLocaleString()}` },
-            { label: "Threshold used", value: `${thresholdUsed.toFixed(1)}%` },
-            { label: "Remaining", value: `£${thresholdRemaining.toLocaleString()}` },
-            { label: "30-day forecast", value: `£${expectedNext30Days.toLocaleString()}` },
-          ].map((card) => (
-            <div key={card.label} className="rounded-xl bg-white p-4 shadow">
-              <p className="text-sm text-gray-500">{card.label}</p>
-              <p className="text-2xl font-bold">{card.value}</p>
-            </div>
-          ))}
-          <div className="rounded-xl bg-white p-4 shadow">
-            <p className="text-sm text-gray-500">Risk</p>
-            <p className={`text-2xl font-bold ${riskColour}`}>{risk}</p>
-          </div>
-        </div>
-
-        {/* ── VAT alerts ───────────────────────────────────── */}
-        {vatAlerts.length > 0 && (
-          <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow">
-            <h2 className="text-xl font-bold text-orange-900">VAT alerts</h2>
-            <p className="mt-1 text-sm text-orange-800">Latest threshold alerts created by the VAT monitoring engine.</p>
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-orange-200 text-left">
-                    <th className="p-2">Client</th>
-                    <th className="p-2">Alert</th>
-                    <th className="p-2">% threshold</th>
-                    <th className="p-2">Message</th>
-                    <th className="p-2">Date</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {vatAlerts.slice(0, 10).map((alert) => {
-                    const client = savedClients.find((c) => c.id === alert.client_id);
-                    return (
-                      <tr key={alert.id} className="border-b border-orange-100">
-                        <td className="p-2 font-medium">{client?.name || "Unknown"}</td>
-                        <td className="p-2 font-semibold">{alert.alert_type}</td>
-                        <td className="p-2">{Number(alert.threshold_percentage || 0).toFixed(1)}%</td>
-                        <td className="p-2">{alert.message}</td>
-                        <td className="p-2">{new Date(alert.created_at).toLocaleString("en-GB")}</td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ── Client list ──────────────────────────────────── */}
-        <div className="mb-6 rounded-2xl bg-white p-6 shadow">
-          <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div>
-              <h2 className="text-xl font-bold">Client dashboard</h2>
-              <p className="text-sm text-slate-500">All clients, latest turnover, threshold usage and VAT risk.</p>
-            </div>
-            <div className="flex gap-2">
-              <button
-                onClick={() => { setShowNewClientModal(true); setNewClientError(""); }}
-                className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white"
-              >
-                + New client
-              </button>
-              <button onClick={loadSavedData} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46]">
-                {loadingSaved ? "Loading..." : "Refresh"}
-              </button>
-            </div>
-          </div>
-
-          {savedClients.length === 0 ? (
-            <div className="rounded-xl bg-slate-50 p-8 text-center">
-              <p className="text-slate-500">No clients yet.</p>
-              <button
-                onClick={() => { setShowNewClientModal(true); setNewClientError(""); }}
-                className="mt-3 rounded-xl bg-[#343b46] px-5 py-2 text-sm font-semibold text-white"
-              >
-                Add your first client
-              </button>
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left">
-                    <th className="p-2">Client</th>
-                    <th className="p-2">Sector</th>
-                    <th className="p-2">Latest turnover</th>
-                    <th className="p-2">% threshold</th>
-                    <th className="p-2">Risk</th>
-                    <th className="p-2">Alert</th>
-                    <th className="p-2">Xero</th>
-                    <th className="p-2">Action</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {savedClients.map((client) => {
-                    const review = latestReviewForClient(client.id);
-                    const latestAlert = latestAlertForClient(client.id);
-                    const turnover = Number(review?.rolling_taxable_turnover || 0);
-                    const percent = (turnover / VAT_THRESHOLD) * 100;
-                    const xeroConnection = connectionForClient(client.id, "xero");
-                    const rowRisk = review?.risk_status || "No review";
-                    const rowRiskColour =
-                      turnover >= VAT_THRESHOLD ? "text-red-700"
-                      : turnover >= VAT_THRESHOLD * 0.9 ? "text-orange-700"
-                      : turnover >= VAT_THRESHOLD * 0.8 ? "text-yellow-700"
-                      : "text-green-700";
-                    return (
-                      <tr key={client.id} className={`border-b ${selectedClientId === client.id ? "bg-[#f2f7f8]" : ""}`}>
-                        <td className="p-2 font-medium">{client.name}</td>
-                        <td className="p-2">{client.sector || "-"}</td>
-                        <td className="p-2">£{turnover.toLocaleString()}</td>
-                        <td className="p-2">{percent.toFixed(1)}%</td>
-                        <td className={`p-2 font-semibold ${rowRiskColour}`}>{rowRisk}</td>
-                        <td className="p-2">
-                          {latestAlert ? (
-                            <span className="rounded-full bg-orange-100 px-3 py-1 text-xs font-semibold text-orange-700">{latestAlert.alert_type}</span>
-                          ) : (
-                            <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">Clear</span>
-                          )}
-                        </td>
-                        <td className="p-2">
-                          {xeroConnection ? (
-                            <span className="rounded-full bg-green-100 px-3 py-1 text-xs font-semibold text-green-700">Connected</span>
-                          ) : (
-                            <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">Not connected</span>
-                          )}
-                        </td>
-                        <td className="p-2">
-                          <button onClick={() => openClient(client)} className="rounded-lg bg-slate-100 px-3 py-1 text-sm font-semibold hover:bg-slate-200">
-                            Open
-                          </button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-
-        {/* ── Selected client alerts ───────────────────────── */}
-        {selectedClientId && selectedClientAlerts.length > 0 && (
-          <div className="mb-6 rounded-2xl border border-orange-200 bg-white p-6 shadow">
-            <h2 className="text-xl font-bold">Alerts — {clientName}</h2>
-            <div className="mt-4 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b text-left">
-                    <th className="p-2">Alert type</th>
-                    <th className="p-2">% threshold</th>
-                    <th className="p-2">Message</th>
-                    <th className="p-2">Created</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {selectedClientAlerts.map((alert) => (
-                    <tr key={alert.id} className="border-b">
-                      <td className="p-2 font-semibold">{alert.alert_type}</td>
-                      <td className="p-2">{Number(alert.threshold_percentage || 0).toFixed(1)}%</td>
-                      <td className="p-2">{alert.message}</td>
-                      <td className="p-2">{new Date(alert.created_at).toLocaleString("en-GB")}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )}
-
-        {/* ── Xero connection ──────────────────────────────── */}
-        {selectedClientId && (
-          <div className="mb-6 rounded-2xl bg-white p-6 shadow">
-            <h2 className="text-xl font-bold">Xero connection — {clientName}</h2>
-            <p className="mt-1 text-sm text-slate-500">Connect Xero and import income automatically.</p>
-            <div className="mt-4 rounded-2xl border bg-slate-50 p-4">
-              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                <div>
-                  <h3 className="font-semibold">Xero</h3>
-                  <p className="text-sm text-slate-600">
-                    {selectedXeroConnection
-                      ? `Connected on ${new Date(selectedXeroConnection.connected_at).toLocaleDateString("en-GB")}`
-                      : "Not connected yet. Make sure you are logged into the correct Xero organisation before connecting."}
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <button onClick={connectXero} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white">
-                    {selectedXeroConnection ? "Reconnect Xero" : "Connect Xero"}
-                  </button>
-                  <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-[#c9af69] text-[#343b46] font-semibold px-4 py-2 text-sm disabled:opacity-50">
-                    {importingXero ? "Importing..." : "Import from Xero"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ── Account mappings ─────────────────────────────── */}
-        {selectedClientId && (
-          <div className="mb-6">
-            <AccountMappings clientId={selectedClientId} clientName={clientName} />
-          </div>
-        )}
-
-        {/* ── VAT review history ───────────────────────────── */}
-        {selectedClientId && (
-          <div className="mb-6 rounded-2xl bg-white p-6 shadow">
-            <h2 className="text-xl font-bold">VAT review history — {clientName}</h2>
-            {selectedClientReviews.length === 0 ? (
-              <p className="mt-4 rounded-xl bg-slate-50 p-4 text-sm text-slate-600">No VAT review history yet.</p>
-            ) : (
-              <div className="mt-4 overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b text-left">
-                      <th className="p-2">Review date</th>
-                      <th className="p-2">Taxable turnover</th>
-                      <th className="p-2">Risk status</th>
-                      <th className="p-2">Version</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {selectedClientReviews.map((review, index) => (
-                      <tr key={review.id} className={index === 0 ? "border-b bg-[#f2f7f8]" : "border-b"}>
-                        <td className="p-2">{new Date(review.created_at).toLocaleString("en-GB")}</td>
-                        <td className="p-2 font-semibold">£{Number(review.rolling_taxable_turnover).toLocaleString()}</td>
-                        <td className="p-2">{review.risk_status}</td>
-                        <td className="p-2">{index === 0 ? "Latest" : `Previous ${index}`}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* ── Manual turnover entry ────────────────────────── */}
-        {selectedClientId && (
-          <>
-            <div className="mb-6 grid gap-6 md:grid-cols-2">
-              <div className="rounded-2xl bg-white p-6 shadow">
-                <h2 className="mb-3 font-bold">Firm</h2>
-                <input className="w-full rounded border p-2" value={firmName} onChange={(e) => setFirmName(e.target.value)} />
-              </div>
-              <div className="rounded-2xl bg-white p-6 shadow">
-                <h2 className="mb-3 font-bold">Editing — {clientName}</h2>
-                <input className="mb-3 w-full rounded border p-2" placeholder="Client name" value={clientName} onChange={(e) => setClientName(e.target.value)} />
-                <input className="mb-3 w-full rounded border p-2" placeholder="Sector" value={sector} onChange={(e) => setSector(e.target.value)} />
-                <label className="block text-sm font-medium">Expected taxable turnover in next 30 days</label>
-                <input type="number" className="mt-1 w-full rounded border p-2" value={expectedNext30Days} onChange={(e) => setExpectedNext30Days(Number(e.target.value || 0))} />
-              </div>
-            </div>
-
-            <div className="mb-3 flex justify-end">
-              <button onClick={refreshRollingPeriod} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46]">
-                Refresh latest 12-month period
-              </button>
-            </div>
-
-            <div className="overflow-x-auto rounded-2xl bg-white p-6 shadow">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr>
-                    <th className="p-2 text-left">Month</th>
-                    <th className="p-2">Standard-rated</th>
-                    <th className="p-2">Reduced-rated</th>
-                    <th className="p-2">Zero-rated</th>
-                    <th className="p-2">Exempt</th>
-                    <th className="p-2">Out of scope</th>
-                    <th className="p-2">Taxable total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {months.map((month, index) => (
-                    <tr key={month.month}>
-                      <td className="p-2 font-medium">{month.month}</td>
-                      {(["standard", "reduced", "zero", "exempt", "out"] as VatField[]).map((field) => (
-                        <td key={field} className="p-2">
-                          <input type="number" className="w-28 rounded border p-2" value={month[field]} onChange={(e) => updateValue(index, field, Number(e.target.value))} />
-                        </td>
-                      ))}
-                      <td className="p-2 font-semibold">£{(month.standard + month.reduced + month.zero).toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="mt-6 rounded-2xl bg-white p-5 text-sm text-slate-700 shadow">
-              <strong>VAT logic:</strong> Standard-rated, reduced-rated and zero-rated income are included in taxable turnover. Exempt and out-of-scope income are excluded from the VAT registration threshold calculation.
-            </div>
-
-            <button onClick={saveAll} className="mt-6 rounded bg-[#343b46] px-6 py-3 text-white" disabled={saving}>
-              {saving ? "Saving..." : "Save VAT Review"}
-            </button>
-          </>
-        )}
-
-        {message && <p className="mt-4 rounded-xl bg-slate-100 p-3 text-sm">{message}</p>}
       </div>
     </main>
   );
