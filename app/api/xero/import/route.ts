@@ -206,6 +206,7 @@ export async function GET(request: Request) {
       const invoicesRes = await xeroGet(
         `https://api.xero.com/api.xro/2.0/Invoices` +
           `?Type=ACCREC` +
+          `&Statuses=AUTHORISED,PAID` +
           `&where=Date%3E%3DDateTime(${fromDate.getFullYear()}%2C${fromDate.getMonth() + 1}%2C1)%26%26Date%3C%3DDateTime(${toDate.getFullYear()}%2C${toDate.getMonth() + 1}%2C${toDate.getDate()})` +
           `&page=${invoicePage}` +
           `&summaryOnly=false`
@@ -227,7 +228,7 @@ export async function GET(request: Request) {
           const code = String(line.AccountCode || "").trim();
           const classification = accountMap.get(code);
           if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
-          const amount = Math.abs(safeNumber(line.LineAmount));
+          const amount = safeNumber(line.LineAmount));
           if (amount === 0) continue;
 
           importedLines.push({
