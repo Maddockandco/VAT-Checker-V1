@@ -1,6 +1,7 @@
 // app/api/xero/import/route.ts
 // Imports transactions from Xero using confirmed account mappings
 // Handles invoices (AUTHORISED/PAID only), bank transactions and manual journals
+// Uses NET (ex VAT) amounts throughout to match Xero P&L
 
 import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
@@ -199,10 +200,8 @@ export async function GET(request: Request) {
     let totalLinesSkipped = 0;
 
     // ── 1. INVOICES ────────────────────────────────────────────
-    // Only pull AUTHORISED and PAID invoices — Draft/Voided excluded
-    // as they don't appear in the Xero P&L
-    // Line amounts kept as-is (not Math.abs) so credit note lines
-    // stay negative and reduce the turnover correctly
+    // Only AUTHORISED and PAID — excludes Draft/Voided
+    // Use NET amount (LineAmount minus TaxAmount) to match P&L
     let invoicePage = 1;
     let invoicesDone = false;
 
@@ -232,9 +231,13 @@ export async function GET(request: Request) {
           const classification = accountMap.get(code);
           if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
 
-          // Do NOT use Math.abs — credit note lines must stay negative
-          const amount = safeNumber(line.LineAmount);
-          if (amount === 0) continue;
+          // NET amount = LineAmount minus TaxAmount to match Xero P&L (ex VAT)
+          const lineAmount = safeNumber(line.LineAmount);
+          const taxAmount = safeNumber(line.TaxAmount);
+          const netAmount = lineAmount >= 0
+            ? lineAmount - Math.abs(taxAmount)
+            : lineAmount + Math.abs(taxAmount);
+          if (netAmount === 0) continue;
 
           importedLines.push({
             client_id: clientId,
@@ -247,7 +250,7 @@ export async function GET(request: Request) {
             description: line.Description || null,
             tax_type: line.TaxType || null,
             vat_classification: classification,
-            amount: Number(amount.toFixed(2)),
+            amount: Number(netAmount.toFixed(2)),
             updated_at: new Date().toISOString(),
           });
           totalLinesImported++;
@@ -257,8 +260,8 @@ export async function GET(request: Request) {
     }
 
     // ── 2. BANK TRANSACTIONS (receipts AND refunds) ────────────
-    // RECEIVE = income posting to income accounts
-    // SPEND on income accounts = refunds/deductions (negative)
+    // RECEIVE = income, SPEND on income accounts = refunds
+    // Use NET amount to match P&L
     for (const txnType of ["RECEIVE", "SPEND"]) {
       let bankPage = 1;
       let bankDone = false;
@@ -291,12 +294,12 @@ export async function GET(request: Request) {
             if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
 
             const rawAmount = safeNumber(line.LineAmount ?? line.UnitAmount ?? 0);
+            const taxAmount = safeNumber(line.TaxAmount ?? 0);
             if (rawAmount === 0) continue;
 
-            // RECEIVE = positive income, SPEND = negative (refund)
-            const amount = txnType === "SPEND"
-              ? -Math.abs(rawAmount)
-              : Math.abs(rawAmount);
+            // NET amount ex VAT
+            const netRaw = Math.abs(rawAmount) - Math.abs(taxAmount);
+            const amount = txnType === "SPEND" ? -netRaw : netRaw;
 
             importedLines.push({
               client_id: clientId,
@@ -320,9 +323,10 @@ export async function GET(request: Request) {
     }
 
     // ── 3. MANUAL JOURNALS ─────────────────────────────────────
-    // For businesses that record sales via EPOS journals
-    // Xero ignores date filters on ManualJournals so we filter in code
-    // Only negative LineAmount on income accounts = income credit
+    // For businesses recording sales via EPOS journals
+    // Xero ignores date filters on ManualJournals — we filter in code
+    // Only CREDIT lines (negative LineAmount) = income posted
+    // Use NET amount (LineAmount minus TaxAmount) to match P&L ex VAT
     let journalPage = 1;
     let journalsDone = false;
 
@@ -339,6 +343,7 @@ export async function GET(request: Request) {
       for (const journal of journals) {
         const date = parseXeroDate(journal.Date || journal.DateString);
         if (!date) { totalLinesSkipped++; continue; }
+        // Filter by date in code — Xero ignores where clause on ManualJournals
         if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
 
         totalRecordsProcessed++;
@@ -353,8 +358,12 @@ export async function GET(request: Request) {
           // Only CREDIT lines (negative) = income being posted
           if (lineAmount >= 0) { totalLinesSkipped++; continue; }
 
-          const absAmount = Math.abs(lineAmount);
-          if (absAmount === 0) continue;
+          const taxAmount = safeNumber(line.TaxAmount ?? 0);
+          // NET amount ex VAT — subtract tax from gross to get net
+          const absGross = Math.abs(lineAmount);
+          const absTax = Math.abs(taxAmount);
+          const netAmount = absGross - absTax;
+          if (netAmount === 0) continue;
 
           importedLines.push({
             client_id: clientId,
@@ -367,7 +376,7 @@ export async function GET(request: Request) {
             description: line.Description || journal.Narration || null,
             tax_type: line.TaxType || null,
             vat_classification: classification,
-            amount: Number(absAmount.toFixed(2)),
+            amount: Number(netAmount.toFixed(2)),
             updated_at: new Date().toISOString(),
           });
           totalLinesImported++;
@@ -408,20 +417,12 @@ export async function GET(request: Request) {
       const label = monthLabel(date);
 
       if (!buckets.has(key)) {
-        buckets.set(key, {
-          month_label: label,
-          standard_rated: 0,
-          reduced_rated: 0,
-          zero_rated: 0,
-          exempt: 0,
-          out_of_scope: 0,
-        });
+        buckets.set(key, { month_label: label, standard_rated: 0, reduced_rated: 0, zero_rated: 0, exempt: 0, out_of_scope: 0 });
       }
 
       const bucket = buckets.get(key)!;
       const classification = line.vat_classification as VatClassification;
 
-      // Amount can be negative for refunds/credit notes — adds correctly
       if (classification === "standard_rated") bucket.standard_rated += line.amount;
       else if (classification === "reduced_rated") bucket.reduced_rated += line.amount;
       else if (classification === "zero_rated") bucket.zero_rated += line.amount;
