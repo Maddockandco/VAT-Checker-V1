@@ -140,12 +140,23 @@ export default function VatDashboard() {
     setSector(client.sector || "");
     setMessage(`Editing ${client.name}`);
     const baseMonths = getLastCompleted12Months();
+
     const { data: entries } = await supabase
       .from("turnover_entries")
-      .select("month_label,standard_rated,reduced_rated,zero_rated,exempt,out_of_scope")
+      .select("month_label,standard_rated,reduced_rated,zero_rated,exempt,out_of_scope,source")
       .eq("client_id", client.id);
+
     const loadedMonths = baseMonths.map((month) => {
-      const match = entries?.find((entry) => entry.month_label === month.month);
+      // Prefer xero source over manual — if xero data exists use it,
+      // otherwise fall back to manual entry
+      const xeroEntry = entries?.find(
+        (e) => e.month_label === month.month && e.source === "xero"
+      );
+      const manualEntry = entries?.find(
+        (e) => e.month_label === month.month && e.source === "manual"
+      );
+      const match = xeroEntry || manualEntry;
+
       return {
         month: month.month,
         standard: Number(match?.standard_rated || 0),
@@ -155,6 +166,7 @@ export default function VatDashboard() {
         out: Number(match?.out_of_scope || 0),
       };
     });
+
     setMonths(loadedMonths);
     setExpectedNext30Days(0);
   }
