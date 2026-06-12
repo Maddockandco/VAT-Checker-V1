@@ -4,6 +4,13 @@ import React, { useEffect, useState } from "react";
 import { createClient, type User } from "@supabase/supabase-js";
 import AccountMappings from "@/components/AccountMappings";
 
+// Maddock & Co brand colours:
+// Primary dark:  #343b46
+// Gold accent:   #c9af69
+// Light bg:      #f2f7f8
+// Near black:    #060606
+// Font: Open Sans
+
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
 
@@ -372,12 +379,12 @@ export default function VatDashboard() {
 
   if (!user) {
     return (
-      <main className="min-h-screen bg-slate-50 p-6">
+      <main className="min-h-screen bg-[#f2f7f8] p-6">
         <div className="mx-auto max-w-xl">
-          <div className="mb-6 rounded-3xl bg-blue-950 p-8 text-white">
+          <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
             <p>Provided by Maddock & Co.</p>
             <h1 className="mt-2 text-4xl font-bold">VAT Checker Login</h1>
-            <p className="mt-3 text-blue-100">Secure access for accounting firms and client users.</p>
+            <p className="mt-3 text-[#f2f7f8]">Secure access for accounting firms and client users.</p>
           </div>
           <div className="rounded-3xl bg-white p-6 shadow">
             <div className="mb-4 flex gap-2 rounded-xl bg-slate-100 p-1">
@@ -388,7 +395,7 @@ export default function VatDashboard() {
             <input type="email" className="mb-4 mt-1 w-full rounded-xl border p-3" value={email} onChange={(e) => setEmail(e.target.value)} />
             <label className="block text-sm font-medium">Password</label>
             <input type="password" className="mb-4 mt-1 w-full rounded-xl border p-3" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button onClick={authMode === "signin" ? signIn : signUp} className="w-full rounded-xl bg-blue-950 px-4 py-3 font-semibold text-white">
+            <button onClick={authMode === "signin" ? signIn : signUp} className="w-full rounded-xl bg-[#343b46] px-4 py-3 font-semibold text-white">
               {authMode === "signin" ? "Sign in" : "Create account"}
             </button>
             {loginMessage && <p className="mt-4 rounded-xl bg-slate-100 p-3 text-sm">{loginMessage}</p>}
@@ -399,33 +406,33 @@ export default function VatDashboard() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-50 p-6">
+    <main className="min-h-screen bg-[#f2f7f8] p-6">
       <div className="mx-auto max-w-7xl">
 
         {/* ── New Client Modal ─────────────────────────────── */}
         {showNewClientModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
-              <div className="rounded-t-2xl bg-blue-950 px-6 py-5 text-white">
+              <div className="rounded-t-2xl bg-[#343b46] px-6 py-5 text-white">
                 <h2 className="text-xl font-bold">Add new client</h2>
-                <p className="mt-1 text-sm text-blue-200">Enter the client details below. You can connect Xero after saving.</p>
+                <p className="mt-1 text-sm text-[#e8eef0]">Enter the client details below. You can connect Xero after saving.</p>
               </div>
               <div className="p-6">
                 <div className="mb-4">
                   <label className="block text-sm font-semibold text-slate-700">Client name <span className="text-red-500">*</span></label>
-                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100" placeholder="e.g. BMA Leisure Ltd" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]/20" placeholder="e.g. BMA Leisure Ltd" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
                 </div>
                 <div className="mb-4">
                   <label className="block text-sm font-semibold text-slate-700">Sector <span className="text-slate-400 font-normal">(optional)</span></label>
-                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100" placeholder="e.g. Hospitality, Retail, Construction" value={newClientSector} onChange={(e) => setNewClientSector(e.target.value)} />
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]/20" placeholder="e.g. Hospitality, Retail, Construction" value={newClientSector} onChange={(e) => setNewClientSector(e.target.value)} />
                 </div>
-                <div className="mb-6 rounded-xl bg-blue-50 p-3 text-sm text-blue-800">
+                <div className="mb-6 rounded-xl bg-[#f2f7f8] p-3 text-sm text-[#343b46]">
                   <strong>Next step:</strong> After saving, open the client and click <strong>Connect Xero</strong> to link their accounting data.
                 </div>
                 {newClientError && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{newClientError}</div>}
                 <div className="flex gap-3">
-                  <button onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientError(""); }} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">Cancel</button>
-                  <button onClick={createNewClient} disabled={newClientSaving || !newClientName.trim()} className="flex-1 rounded-xl bg-blue-950 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{newClientSaving ? "Saving..." : "Save client"}</button>
+                  <button onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientError(""); }} className="flex-1 rounded-xl border border-[#c9af69] px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-slate-50">Cancel</button>
+                  <button onClick={createNewClient} disabled={newClientSaving || !newClientName.trim()} className="flex-1 rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50">{newClientSaving ? "Saving..." : "Save client"}</button>
                 </div>
               </div>
             </div>
@@ -433,17 +440,17 @@ export default function VatDashboard() {
         )}
 
         {/* ── Header ───────────────────────────────────────── */}
-        <div className="mb-6 rounded-3xl bg-blue-950 p-8 text-white">
+        <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-blue-300 text-sm">Provided by Maddock & Co.</p>
+              <p className="text-[#c9af69] text-sm">Provided by Maddock & Co.</p>
               <h1 className="mt-1 text-4xl font-bold">VAT Checker</h1>
               {selectedClientId ? (
-                <p className="mt-2 text-blue-100">
+                <p className="mt-2 text-[#f2f7f8]">
                   Viewing: <span className="font-semibold text-white">{clientName}</span>
                 </p>
               ) : (
-                <p className="mt-2 text-blue-100">Signed in as {user.email}</p>
+                <p className="mt-2 text-[#f2f7f8]">Signed in as {user.email}</p>
               )}
             </div>
             <div className="flex gap-2">
@@ -508,15 +515,15 @@ export default function VatDashboard() {
                   <p className="text-sm text-slate-500">Click a client to open their full VAT details.</p>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="rounded-xl bg-blue-950 px-4 py-2 text-sm font-semibold text-white">+ New client</button>
-                  <button onClick={loadSavedData} className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700">{loadingSaved ? "Loading..." : "Refresh"}</button>
+                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white">+ New client</button>
+                  <button onClick={loadSavedData} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46]">{loadingSaved ? "Loading..." : "Refresh"}</button>
                 </div>
               </div>
 
               {savedClients.length === 0 ? (
                 <div className="rounded-xl bg-slate-50 p-8 text-center">
                   <p className="text-slate-500">No clients yet.</p>
-                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="mt-3 rounded-xl bg-blue-950 px-5 py-2 text-sm font-semibold text-white">Add your first client</button>
+                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="mt-3 rounded-xl bg-[#343b46] px-5 py-2 text-sm font-semibold text-white">Add your first client</button>
                 </div>
               ) : (
                 <div className="overflow-x-auto">
@@ -548,7 +555,7 @@ export default function VatDashboard() {
                           : "text-green-700";
                         return (
                           <tr key={c.id} className="border-b hover:bg-slate-50 cursor-pointer" onClick={() => openClient(c)}>
-                            <td className="p-2 font-medium text-blue-900">{c.name}</td>
+                            <td className="p-2 font-medium text-[#343b46]">{c.name}</td>
                             <td className="p-2">{c.sector || "-"}</td>
                             <td className="p-2">£{turnover.toLocaleString()}</td>
                             <td className="p-2">{percent.toFixed(1)}%</td>
@@ -564,7 +571,7 @@ export default function VatDashboard() {
                                 : <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">Not connected</span>}
                             </td>
                             <td className="p-2">
-                              <button onClick={(e) => { e.stopPropagation(); openClient(c); }} className="rounded-lg bg-blue-950 px-3 py-1 text-sm font-semibold text-white hover:bg-blue-800">Open</button>
+                              <button onClick={(e) => { e.stopPropagation(); openClient(c); }} className="rounded-lg bg-[#343b46] px-3 py-1 text-sm font-semibold text-white hover:bg-[#2d3340]">Open</button>
                             </td>
                           </tr>
                         );
@@ -650,10 +657,10 @@ export default function VatDashboard() {
                     </p>
                   </div>
                   <div className="flex flex-wrap gap-2">
-                    <button onClick={connectXero} className="rounded-xl bg-blue-950 px-4 py-2 text-sm font-semibold text-white">
+                    <button onClick={connectXero} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white">
                       {selectedXeroConnection ? "Reconnect Xero" : "Connect Xero"}
                     </button>
-                    <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                    <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-[#c9af69] text-[#343b46] font-semibold px-4 py-2 text-sm disabled:opacity-50">
                       {importingXero ? "Importing..." : "Import from Xero"}
                     </button>
                   </div>
@@ -684,7 +691,7 @@ export default function VatDashboard() {
                     </thead>
                     <tbody>
                       {selectedClientReviews.map((review, index) => (
-                        <tr key={review.id} className={index === 0 ? "border-b bg-blue-50" : "border-b"}>
+                        <tr key={review.id} className={index === 0 ? "border-b bg-[#f2f7f8]" : "border-b"}>
                           <td className="p-2">{new Date(review.created_at).toLocaleString("en-GB")}</td>
                           <td className="p-2 font-semibold">£{Number(review.rolling_taxable_turnover).toLocaleString()}</td>
                           <td className="p-2">{review.risk_status}</td>
@@ -713,7 +720,7 @@ export default function VatDashboard() {
             </div>
 
             <div className="mb-3 flex justify-end">
-              <button onClick={refreshRollingPeriod} className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700">Refresh 12-month period</button>
+              <button onClick={refreshRollingPeriod} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46]">Refresh 12-month period</button>
             </div>
 
             <div className="overflow-x-auto rounded-2xl bg-white p-6 shadow">
@@ -738,7 +745,7 @@ export default function VatDashboard() {
                           <input type="number" className="w-28 rounded border p-2 text-sm" value={month[field]} onChange={(e) => updateValue(index, field, Number(e.target.value))} />
                         </td>
                       ))}
-                      <td className="p-2 font-semibold text-blue-900">£{(month.standard + month.reduced + month.zero).toLocaleString()}</td>
+                      <td className="p-2 font-semibold text-[#343b46]">£{(month.standard + month.reduced + month.zero).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -750,12 +757,12 @@ export default function VatDashboard() {
             </div>
 
             <div className="mt-6 flex gap-3">
-              <button onClick={saveAll} className="rounded-xl bg-blue-900 px-6 py-3 font-semibold text-white disabled:opacity-50" disabled={saving}>
+              <button onClick={saveAll} className="rounded-xl bg-[#343b46] px-6 py-3 font-semibold text-white disabled:opacity-50" disabled={saving}>
                 {saving ? "Saving..." : "Save VAT Review"}
               </button>
               <button
                 onClick={() => { setSelectedClientId(null); setClientName(""); setMessage(""); setMonths(getLastCompleted12Months()); }}
-                className="rounded-xl border border-slate-200 px-6 py-3 font-semibold text-slate-700 hover:bg-slate-50"
+                className="rounded-xl border border-[#c9af69] px-6 py-3 font-semibold text-[#343b46] hover:bg-slate-50"
               >
                 ← Back to all clients
               </button>
@@ -772,9 +779,9 @@ export default function VatDashboard() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
               {/* Modal header */}
-              <div className="rounded-t-2xl bg-blue-950 px-6 py-5 text-white">
+              <div className="rounded-t-2xl bg-[#343b46] px-6 py-5 text-white">
                 <h2 className="text-xl font-bold">Add new client</h2>
-                <p className="mt-1 text-sm text-blue-200">Enter the client details below. You can connect Xero after saving.</p>
+                <p className="mt-1 text-sm text-[#e8eef0]">Enter the client details below. You can connect Xero after saving.</p>
               </div>
 
               {/* Modal body */}
@@ -783,7 +790,7 @@ export default function VatDashboard() {
                   <label className="block text-sm font-semibold text-slate-700">Client name <span className="text-red-500">*</span></label>
                   <input
                     type="text"
-                    className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]/20"
                     placeholder="e.g. BMA Leisure Ltd"
                     value={newClientName}
                     onChange={(e) => setNewClientName(e.target.value)}
@@ -795,14 +802,14 @@ export default function VatDashboard() {
                   <label className="block text-sm font-semibold text-slate-700">Sector <span className="text-slate-400 font-normal">(optional)</span></label>
                   <input
                     type="text"
-                    className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                    className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]/20"
                     placeholder="e.g. Hospitality, Retail, Construction"
                     value={newClientSector}
                     onChange={(e) => setNewClientSector(e.target.value)}
                   />
                 </div>
 
-                <div className="mb-6 rounded-xl bg-blue-50 p-3 text-sm text-blue-800">
+                <div className="mb-6 rounded-xl bg-[#f2f7f8] p-3 text-sm text-[#343b46]">
                   <strong>Next step:</strong> After saving, open the client and click <strong>Connect Xero</strong> to link their accounting data.
                 </div>
 
@@ -815,14 +822,14 @@ export default function VatDashboard() {
                 <div className="flex gap-3">
                   <button
                     onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientError(""); }}
-                    className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50"
+                    className="flex-1 rounded-xl border border-[#c9af69] px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-slate-50"
                   >
                     Cancel
                   </button>
                   <button
                     onClick={createNewClient}
                     disabled={newClientSaving || !newClientName.trim()}
-                    className="flex-1 rounded-xl bg-blue-950 px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
+                    className="flex-1 rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white disabled:opacity-50"
                   >
                     {newClientSaving ? "Saving..." : "Save client"}
                   </button>
@@ -833,13 +840,13 @@ export default function VatDashboard() {
         )}
 
         {/* ── Header ───────────────────────────────────────── */}
-        <div className="mb-6 rounded-3xl bg-blue-950 p-8 text-white">
+        <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <p>Provided by Maddock & Co.</p>
               <h1 className="mt-2 text-4xl font-bold">VAT Checker</h1>
-              <p className="mt-2 text-blue-100">Signed in as {user.email}</p>
-              <p className="mt-1 text-sm text-blue-100">Rolling period: {rollingPeriod}</p>
+              <p className="mt-2 text-[#f2f7f8]">Signed in as {user.email}</p>
+              <p className="mt-1 text-sm text-[#f2f7f8]">Rolling period: {rollingPeriod}</p>
             </div>
             <button onClick={signOut} className="rounded-xl bg-white/10 px-4 py-2 text-sm font-semibold text-white ring-1 ring-white/20">Sign out</button>
           </div>
@@ -909,11 +916,11 @@ export default function VatDashboard() {
             <div className="flex gap-2">
               <button
                 onClick={() => { setShowNewClientModal(true); setNewClientError(""); }}
-                className="rounded-xl bg-blue-950 px-4 py-2 text-sm font-semibold text-white"
+                className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white"
               >
                 + New client
               </button>
-              <button onClick={loadSavedData} className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700">
+              <button onClick={loadSavedData} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46]">
                 {loadingSaved ? "Loading..." : "Refresh"}
               </button>
             </div>
@@ -924,7 +931,7 @@ export default function VatDashboard() {
               <p className="text-slate-500">No clients yet.</p>
               <button
                 onClick={() => { setShowNewClientModal(true); setNewClientError(""); }}
-                className="mt-3 rounded-xl bg-blue-950 px-5 py-2 text-sm font-semibold text-white"
+                className="mt-3 rounded-xl bg-[#343b46] px-5 py-2 text-sm font-semibold text-white"
               >
                 Add your first client
               </button>
@@ -958,7 +965,7 @@ export default function VatDashboard() {
                       : turnover >= VAT_THRESHOLD * 0.8 ? "text-yellow-700"
                       : "text-green-700";
                     return (
-                      <tr key={client.id} className={`border-b ${selectedClientId === client.id ? "bg-blue-50" : ""}`}>
+                      <tr key={client.id} className={`border-b ${selectedClientId === client.id ? "bg-[#f2f7f8]" : ""}`}>
                         <td className="p-2 font-medium">{client.name}</td>
                         <td className="p-2">{client.sector || "-"}</td>
                         <td className="p-2">£{turnover.toLocaleString()}</td>
@@ -1037,10 +1044,10 @@ export default function VatDashboard() {
                   </p>
                 </div>
                 <div className="flex flex-wrap gap-2">
-                  <button onClick={connectXero} className="rounded-xl bg-blue-950 px-4 py-2 text-sm font-semibold text-white">
+                  <button onClick={connectXero} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white">
                     {selectedXeroConnection ? "Reconnect Xero" : "Connect Xero"}
                   </button>
-                  <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-green-700 px-4 py-2 text-sm font-semibold text-white disabled:opacity-50">
+                  <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-[#c9af69] text-[#343b46] font-semibold px-4 py-2 text-sm disabled:opacity-50">
                     {importingXero ? "Importing..." : "Import from Xero"}
                   </button>
                 </div>
@@ -1075,7 +1082,7 @@ export default function VatDashboard() {
                   </thead>
                   <tbody>
                     {selectedClientReviews.map((review, index) => (
-                      <tr key={review.id} className={index === 0 ? "border-b bg-blue-50" : "border-b"}>
+                      <tr key={review.id} className={index === 0 ? "border-b bg-[#f2f7f8]" : "border-b"}>
                         <td className="p-2">{new Date(review.created_at).toLocaleString("en-GB")}</td>
                         <td className="p-2 font-semibold">£{Number(review.rolling_taxable_turnover).toLocaleString()}</td>
                         <td className="p-2">{review.risk_status}</td>
@@ -1107,7 +1114,7 @@ export default function VatDashboard() {
             </div>
 
             <div className="mb-3 flex justify-end">
-              <button onClick={refreshRollingPeriod} className="rounded-xl bg-slate-100 px-4 py-2 text-sm font-semibold text-slate-700">
+              <button onClick={refreshRollingPeriod} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46]">
                 Refresh latest 12-month period
               </button>
             </div>
@@ -1145,7 +1152,7 @@ export default function VatDashboard() {
               <strong>VAT logic:</strong> Standard-rated, reduced-rated and zero-rated income are included in taxable turnover. Exempt and out-of-scope income are excluded from the VAT registration threshold calculation.
             </div>
 
-            <button onClick={saveAll} className="mt-6 rounded bg-blue-900 px-6 py-3 text-white" disabled={saving}>
+            <button onClick={saveAll} className="mt-6 rounded bg-[#343b46] px-6 py-3 text-white" disabled={saving}>
               {saving ? "Saving..." : "Save VAT Review"}
             </button>
           </>
