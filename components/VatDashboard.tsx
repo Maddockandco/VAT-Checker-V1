@@ -1,4 +1,4 @@
-"use client";
+d"use client";
 
 import React, { useEffect, useState } from "react";
 import { createClient, type User } from "@supabase/supabase-js";
@@ -111,6 +111,12 @@ export default function VatDashboard() {
   const [newClientSaving, setNewClientSaving] = useState(false);
   const [newClientError, setNewClientError] = useState("");
 
+  // Xero organisation picker state
+  const [showOrgPicker, setShowOrgPicker] = useState(false);
+  const [orgPickerClientId, setOrgPickerClientId] = useState<string | null>(null);
+  const [orgPickerOrgs, setOrgPickerOrgs] = useState<Array<{ tenantId: string; tenantName: string }>>([]);
+  const [orgPickerSaving, setOrgPickerSaving] = useState(false);
+
   useEffect(() => {
     if (!supabase) return;
     supabase.auth.getUser().then(({ data }) => {
@@ -120,6 +126,30 @@ export default function VatDashboard() {
       setUser(session?.user || null);
       if (session?.user) loadSavedData();
     });
+
+    // Handle Xero OAuth callback params
+    const params = new URLSearchParams(window.location.search);
+    const xeroStatus = params.get("xero");
+    const pickClientId = params.get("clientId");
+    const orgsParam = params.get("orgs");
+
+    if (xeroStatus === "pick_org" && pickClientId && orgsParam) {
+      try {
+        const orgs = JSON.parse(decodeURIComponent(orgsParam));
+        setOrgPickerClientId(pickClientId);
+        setOrgPickerOrgs(orgs);
+        setShowOrgPicker(true);
+        // Clean up URL
+        window.history.replaceState({}, "", "/dashboard");
+      } catch { /* ignore parse errors */ }
+    } else if (xeroStatus === "connected") {
+      setMessage("Xero connected successfully!");
+      window.history.replaceState({}, "", "/dashboard");
+    } else if (xeroStatus === "error") {
+      setMessage("Xero connection failed. Please try again.");
+      window.history.replaceState({}, "", "/dashboard");
+    }
+
     return () => subscription.unsubscribe();
   }, []);
 
@@ -227,6 +257,33 @@ export default function VatDashboard() {
     const updated = [...months];
     updated[index] = { ...updated[index], [field]: value };
     setMonths(updated);
+  }
+
+  async function selectXeroOrg(tenantId: string) {
+    if (!orgPickerClientId) return;
+    setOrgPickerSaving(true);
+    try {
+      const res = await fetch("/api/xero/select-org", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: orgPickerClientId, tenantId }),
+      });
+      if (res.ok) {
+        setShowOrgPicker(false);
+        setOrgPickerClientId(null);
+        setOrgPickerOrgs([]);
+        await loadSavedData();
+        // Open the client that was just connected
+        const connectedClient = savedClients.find((c) => c.id === orgPickerClientId);
+        if (connectedClient) await openClient(connectedClient);
+        setMessage("Xero connected successfully!");
+      } else {
+        setMessage("Failed to save Xero organisation. Please try again.");
+      }
+    } catch {
+      setMessage("Failed to save Xero organisation. Please try again.");
+    }
+    setOrgPickerSaving(false);
   }
 
   async function createNewClient() {
@@ -353,6 +410,40 @@ export default function VatDashboard() {
   return (
     <main className="min-h-screen bg-[#f2f7f8] p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
       <div className="mx-auto max-w-7xl">
+
+        {/* Xero Organisation Picker Modal */}
+        {showOrgPicker && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+            <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+              <div className="rounded-t-2xl bg-[#343b46] px-6 py-5 text-white">
+                <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-wide mb-1">Xero Connection</p>
+                <h2 className="text-xl font-bold">Select Xero Organisation</h2>
+                <p className="mt-1 text-sm text-slate-300">Choose which Xero organisation to link to this client.</p>
+              </div>
+              <div className="p-6">
+                <div className="space-y-3">
+                  {orgPickerOrgs.map((org) => (
+                    <button
+                      key={org.tenantId}
+                      onClick={() => selectXeroOrg(org.tenantId)}
+                      disabled={orgPickerSaving}
+                      className="w-full rounded-xl border-2 border-slate-200 p-4 text-left hover:border-[#c9af69] hover:bg-[#f2f7f8] transition-all disabled:opacity-50"
+                    >
+                      <p className="font-semibold text-[#343b46]">{org.tenantName}</p>
+                      <p className="text-xs text-slate-400 mt-1">{org.tenantId}</p>
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => { setShowOrgPicker(false); setOrgPickerClientId(null); setOrgPickerOrgs([]); }}
+                  className="mt-4 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8]"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* New Client Modal */}
         {showNewClientModal && (
