@@ -225,18 +225,21 @@ export async function GET(request: Request) {
         const date = parseXeroDate(invoice.Date || invoice.DateString) || new Date();
         if (date < fromDate || date > toDate) { totalLinesSkipped++; continue; }
         const lines = invoice.LineItems || [];
+        const isInclusive = String(invoice.LineAmountTypes || "").toUpperCase() === "INCLUSIVE";
 
         for (const [i, line] of lines.entries()) {
           const code = String(line.AccountCode || "").trim();
           const classification = accountMap.get(code);
           if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
 
-          // NET amount = LineAmount minus TaxAmount to match Xero P&L (ex VAT)
           const lineAmount = safeNumber(line.LineAmount);
-          const taxAmount = safeNumber(line.TaxAmount);
+          const taxAmount = safeNumber(line.TaxAmount ?? 0);
+          // If Inclusive: subtract VAT to get net. If Exclusive: already net
+          const absGross = Math.abs(lineAmount);
+          const absTax = Math.abs(taxAmount);
           const netAmount = lineAmount >= 0
-            ? lineAmount - Math.abs(taxAmount)
-            : lineAmount + Math.abs(taxAmount);
+            ? (isInclusive ? absGross - absTax : absGross)
+            : -(isInclusive ? absGross - absTax : absGross);
           if (netAmount === 0) continue;
 
           importedLines.push({
@@ -287,6 +290,7 @@ export async function GET(request: Request) {
 
           totalRecordsProcessed++;
           const lines = txn.LineItems || [];
+          const isInclusive = String(txn.LineAmountTypes || "").toUpperCase() === "INCLUSIVE";
 
           for (const [i, line] of lines.entries()) {
             const code = String(line.AccountCode || "").trim();
@@ -297,8 +301,10 @@ export async function GET(request: Request) {
             const taxAmount = safeNumber(line.TaxAmount ?? 0);
             if (rawAmount === 0) continue;
 
-            // NET amount ex VAT
-            const netRaw = Math.abs(rawAmount) - Math.abs(taxAmount);
+            // If Inclusive: subtract VAT to get net. If Exclusive: already net
+            const absGross = Math.abs(rawAmount);
+            const absTax = Math.abs(taxAmount);
+            const netRaw = isInclusive ? absGross - absTax : absGross;
             const amount = txnType === "SPEND" ? -netRaw : netRaw;
 
             importedLines.push({
@@ -348,6 +354,10 @@ export async function GET(request: Request) {
 
         totalRecordsProcessed++;
         const lines = journal.JournalLines || [];
+        // Check how amounts are stored on this journal
+        // Exclusive = LineAmount is already ex VAT, use as-is
+        // Inclusive = LineAmount is gross inc VAT, subtract TaxAmount to get net
+        const isInclusive = String(journal.LineAmountTypes || "").toUpperCase() === "INCLUSIVE";
 
         for (const [i, line] of lines.entries()) {
           const code = String(line.AccountCode || "").trim();
@@ -359,10 +369,10 @@ export async function GET(request: Request) {
           if (lineAmount >= 0) { totalLinesSkipped++; continue; }
 
           const taxAmount = safeNumber(line.TaxAmount ?? 0);
-          // NET amount ex VAT — subtract tax from gross to get net
           const absGross = Math.abs(lineAmount);
           const absTax = Math.abs(taxAmount);
-          const netAmount = absGross - absTax;
+          // If Inclusive: subtract VAT to get net. If Exclusive: already net, use as-is
+          const netAmount = isInclusive ? absGross - absTax : absGross;
           if (netAmount === 0) continue;
 
           importedLines.push({
