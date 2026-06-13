@@ -108,6 +108,8 @@ export default function VatDashboard() {
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [newClientName, setNewClientName] = useState("");
   const [newClientSector, setNewClientSector] = useState("");
+  const [newClientEmail, setNewClientEmail] = useState("");
+  const [newClientSectorField, setNewClientSectorField] = useState("");
   const [newClientSaving, setNewClientSaving] = useState(false);
   const [newClientError, setNewClientError] = useState("");
 
@@ -297,11 +299,19 @@ export default function VatDashboard() {
       const { data: firm, error: firmError } = await supabase.from("firms").insert({ name: firmName, subscription_status: "trial" }).select().single();
       if (firmError || !firm) throw new Error(`Firm error: ${firmError?.message}`);
       await supabase.from("firm_user_access").insert({ firm_id: firm.id, user_id: user.id, role: "firm_admin" });
-      const { data: client, error: clientError } = await supabase.from("clients").insert({ firm_id: firm.id, name: newClientName.trim(), sector: newClientSector.trim() || null }).select().single();
+      const { data: client, error: clientError } = await supabase.from("clients").insert({
+        firm_id: firm.id,
+        name: newClientName.trim(),
+        sector: newClientSectorField.trim() || null,
+        email: newClientEmail.trim() || null,
+        contact_name: newClientSector.trim() || null,
+      }).select().single();
       if (clientError || !client) throw new Error(`Client error: ${clientError?.message}`);
       setShowNewClientModal(false);
       setNewClientName("");
       setNewClientSector("");
+      setNewClientEmail("");
+      setNewClientSectorField("");
       await loadSavedData();
       await openClient(client as SavedClient);
       setMessage(`Client "${client.name}" created. Connect Xero below to import their data.`);
@@ -460,15 +470,23 @@ export default function VatDashboard() {
                   <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. BMA Leisure Ltd" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
                 </div>
                 <div className="mb-4">
+                  <label className="block text-sm font-semibold text-[#343b46]">Contact name <span className="text-slate-400 font-normal">(optional)</span></label>
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. John Smith" value={newClientSector} onChange={(e) => setNewClientSector(e.target.value)} />
+                </div>
+                <div className="mb-4">
+                  <label className="block text-sm font-semibold text-[#343b46]">Client email <span className="text-slate-400 font-normal">(for VAT alerts)</span></label>
+                  <input type="email" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. client@example.com" value={newClientEmail} onChange={(e) => setNewClientEmail(e.target.value)} />
+                </div>
+                <div className="mb-4">
                   <label className="block text-sm font-semibold text-[#343b46]">Sector <span className="text-slate-400 font-normal">(optional)</span></label>
-                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. Hospitality, Retail, Construction" value={newClientSector} onChange={(e) => setNewClientSector(e.target.value)} />
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. Hospitality, Retail, Construction" value={newClientSectorField} onChange={(e) => setNewClientSectorField(e.target.value)} />
                 </div>
                 <div className="mb-6 rounded-xl bg-[#f2f7f8] p-3 text-sm text-[#343b46] border-l-4 border-[#c9af69]">
                   <strong>Next step:</strong> After saving, open the client and click <strong>Connect Xero</strong>.
                 </div>
                 {newClientError && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{newClientError}</div>}
                 <div className="flex gap-3">
-                  <button onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientError(""); }} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8]">Cancel</button>
+                  <button onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientEmail(""); setNewClientSectorField(""); setNewClientError(""); }} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8]">Cancel</button>
                   <button onClick={createNewClient} disabled={newClientSaving || !newClientName.trim()} className="flex-1 rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white hover:bg-[#2a303a] disabled:opacity-50">
                     {newClientSaving ? "Saving..." : "Save client"}
                   </button>
@@ -710,6 +728,26 @@ export default function VatDashboard() {
                     </button>
                     <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
                       {importingXero ? "Importing..." : "Import from Xero"}
+                    </button>
+                    <button
+                      onClick={async () => {
+                        setMessage("Sending alert emails...");
+                        const res = await fetch("/api/alerts/send", {
+                          method: "POST",
+                          headers: { "Content-Type": "application/json" },
+                          body: JSON.stringify({ clientId: selectedClientId }),
+                        });
+                        const data = await res.json();
+                        if (data.ok) {
+                          setMessage(`✅ Alert emails sent to: ${data.emailsSent?.join(", ") || "no recipients configured"}`);
+                          await loadSavedData();
+                        } else {
+                          setMessage(`❌ Alert failed: ${data.error || "Unknown error"}`);
+                        }
+                      }}
+                      className="rounded-xl border border-[#343b46] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors"
+                    >
+                      Send Alert Email
                     </button>
                   </div>
                 </div>
