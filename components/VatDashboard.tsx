@@ -85,7 +85,6 @@ export default function VatDashboard() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginMessage, setLoginMessage] = useState("");
-  const [authMode, setAuthMode] = useState<"signin" | "signup">("signin");
 
   const [firmName, setFirmName] = useState("Maddock & Co.");
   const [clientName, setClientName] = useState("");
@@ -299,14 +298,6 @@ export default function VatDashboard() {
     setSendingAlert(false);
   }
 
-  async function signUp() {
-    setLoginMessage("");
-    if (!supabase) { setLoginMessage("Supabase is not connected."); return; }
-    const { data, error } = await supabase.auth.signUp({ email, password });
-    if (error) { setLoginMessage(error.message); return; }
-    if (data.user) setUser(data.user);
-  }
-
   async function signIn() {
     setLoginMessage("");
     if (!supabase) { setLoginMessage("Supabase is not connected."); return; }
@@ -486,15 +477,18 @@ export default function VatDashboard() {
           <div className="rounded-3xl bg-white p-6 shadow-sm">
             <div className="mb-4 flex gap-2 rounded-xl bg-[#f2f7f8] p-1">
               <button onClick={() => setAuthMode("signin")} className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${authMode === "signin" ? "bg-white shadow text-[#343b46]" : "text-slate-500"}`}>Sign in</button>
-              <button onClick={() => setAuthMode("signup")} className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${authMode === "signup" ? "bg-white shadow text-[#343b46]" : "text-slate-500"}`}>Create account</button>
+              <a href="/signup" className="flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors text-slate-500 hover:text-[#343b46] text-center">Create account</a>
             </div>
             <label className="block text-sm font-semibold text-[#343b46]">Email address</label>
             <input type="email" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={email} onChange={(e) => setEmail(e.target.value)} />
             <label className="block text-sm font-semibold text-[#343b46]">Password</label>
             <input type="password" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={password} onChange={(e) => setPassword(e.target.value)} />
-            <button onClick={authMode === "signin" ? signIn : signUp} className="w-full rounded-xl bg-[#343b46] px-4 py-3 font-semibold text-white hover:bg-[#2a303a] transition-colors">
-              {authMode === "signin" ? "Sign in" : "Create account"}
+            <button onClick={signIn} className="w-full rounded-xl bg-[#343b46] px-4 py-3 font-semibold text-white hover:bg-[#2a303a] transition-colors">
+              Sign in
             </button>
+            <p className="mt-4 text-center text-sm text-slate-500">
+              New firm? <a href="/signup" className="font-semibold text-[#343b46] hover:text-[#c9af69]">Start your free trial →</a>
+            </p>
             {loginMessage && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{loginMessage}</p>}
           </div>
         </div>
