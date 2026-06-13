@@ -1,41 +1,30 @@
-import { createClient } from "@supabase/supabase-js";
 import { NextResponse } from "next/server";
 
-export async function GET(request: Request) {
-  const { searchParams } = new URL(request.url);
-  const clientId = searchParams.get("clientId");
+export async function GET() {
+  const resendApiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.RESEND_FROM_EMAIL;
 
-  const supabase = createClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!
-  );
+  // Test Resend directly
+  const res = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${resendApiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      from: `Maddock & Co. <${fromEmail || "alerts@maddockandco.com"}>`,
+      to: ["clayton@maddockandco.com"],
+      subject: "VAT Checker Test Email",
+      html: "<p>This is a test email from your VAT Checker debug route.</p>",
+    }),
+  });
 
-  const { data: client } = await supabase
-    .from("clients")
-    .select("id,name,email,contact_name,firm_id")
-    .eq("id", clientId)
-    .single();
+  const data = await res.json();
 
-  const { data: review } = await supabase
-    .from("vat_reviews")
-    .select("rolling_taxable_turnover,risk_status")
-    .eq("client_id", clientId)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
-
-  const { data: firmAccess } = await supabase
-    .from("firm_user_access")
-    .select("user_id")
-    .eq("firm_id", client?.firm_id)
-    .limit(1)
-    .single();
-
-  const { data: accountant } = await supabase
-    .from("user_profiles")
-    .select("email,full_name")
-    .eq("id", firmAccess?.user_id)
-    .single();
-
-  return NextResponse.json({ client, review, firmAccess, accountant });
+  return NextResponse.json({
+    resendApiKeyExists: !!resendApiKey,
+    fromEmail: fromEmail || "alerts@maddockandco.com (fallback)",
+    resendStatus: res.status,
+    resendResponse: data,
+  });
 }
