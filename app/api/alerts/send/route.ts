@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const FROM_EMAIL = "alerts@maddockandco.com";
+const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "alerts@maddockandco.com";
 const FIRM_NAME = "Maddock & Co. UK Ltd";
 const FIRM_WEBSITE = "https://www.maddockandco.com";
 
