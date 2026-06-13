@@ -156,10 +156,48 @@ export default function VatDashboard() {
   async function loadSavedData() {
     if (!supabase) return;
     setLoadingSaved(true);
-    const { data: clients } = await supabase.from("clients").select("id,name,sector,firm_id,created_at").order("created_at", { ascending: false });
-    const { data: reviews } = await supabase.from("vat_reviews").select("id,client_id,rolling_taxable_turnover,risk_status,created_at").order("created_at", { ascending: false });
-    const { data: connections } = await supabase.from("accounting_connections").select("id,client_id,provider,provider_tenant_id,connected_at").order("connected_at", { ascending: false });
-    const { data: alerts } = await supabase.from("vat_alerts").select("id,client_id,threshold_percentage,alert_type,message,created_at").order("created_at", { ascending: false });
+
+    // Get the current user's firm
+    const { data: { user: currentUser } } = await supabase.auth.getUser();
+    if (!currentUser) { setLoadingSaved(false); return; }
+
+    const { data: firmAccess } = await supabase
+      .from("firm_user_access")
+      .select("firm_id")
+      .eq("user_id", currentUser.id)
+      .limit(1)
+      .single();
+
+    if (!firmAccess?.firm_id) {
+      setSavedClients([]); setSavedReviews([]); setAccountingConnections([]); setVatAlerts([]);
+      setLoadingSaved(false);
+      return;
+    }
+
+    const firmId = firmAccess.firm_id;
+
+    // Only load clients belonging to this firm
+    const { data: clients } = await supabase
+      .from("clients")
+      .select("id,name,sector,firm_id,created_at")
+      .eq("firm_id", firmId)
+      .order("created_at", { ascending: false });
+
+    const clientIds = (clients || []).map((c) => c.id);
+
+    // Load reviews, connections and alerts only for this firm's clients
+    const { data: reviews } = clientIds.length > 0
+      ? await supabase.from("vat_reviews").select("id,client_id,rolling_taxable_turnover,risk_status,created_at").in("client_id", clientIds).order("created_at", { ascending: false })
+      : { data: [] };
+
+    const { data: connections } = clientIds.length > 0
+      ? await supabase.from("accounting_connections").select("id,client_id,provider,provider_tenant_id,connected_at").in("client_id", clientIds).order("connected_at", { ascending: false })
+      : { data: [] };
+
+    const { data: alerts } = clientIds.length > 0
+      ? await supabase.from("vat_alerts").select("id,client_id,threshold_percentage,alert_type,message,created_at").in("client_id", clientIds).order("created_at", { ascending: false })
+      : { data: [] };
+
     setSavedClients((clients || []) as SavedClient[]);
     setSavedReviews((reviews || []) as SavedReview[]);
     setAccountingConnections((connections || []) as AccountingConnection[]);
@@ -323,18 +361,47 @@ export default function VatDashboard() {
     if (!newClientName.trim()) { setNewClientError("Please enter a client name."); return; }
     setNewClientSaving(true);
     try {
+      // Upsert user profile
       await supabase.from("user_profiles").upsert({ id: user.id, email: user.email, role: "firm_admin" });
-      const { data: firm, error: firmError } = await supabase.from("firms").insert({ name: firmName, subscription_status: "trial" }).select().single();
-      if (firmError || !firm) throw new Error(`Firm error: ${firmError?.message}`);
-      await supabase.from("firm_user_access").insert({ firm_id: firm.id, user_id: user.id, role: "firm_admin" });
-      const { data: client, error: clientError } = await supabase.from("clients").insert({
-        firm_id: firm.id,
-        name: newClientName.trim(),
-        sector: newClientSector.trim() || null,
-        email: newClientEmail.trim() || null,
-        contact_name: newClientContactName.trim() || null,
-      }).select().single();
+
+      // Look up existing firm for this user — reuse it if found
+      let firmId: string | null = null;
+      const { data: existingAccess } = await supabase
+        .from("firm_user_access")
+        .select("firm_id")
+        .eq("user_id", user.id)
+        .limit(1)
+        .single();
+
+      if (existingAccess?.firm_id) {
+        // Reuse existing firm
+        firmId = existingAccess.firm_id;
+      } else {
+        // Create a new firm only if one doesn't exist
+        const { data: firm, error: firmError } = await supabase
+          .from("firms")
+          .insert({ name: firmName, subscription_status: "trial" })
+          .select()
+          .single();
+        if (firmError || !firm) throw new Error(`Firm error: ${firmError?.message}`);
+        await supabase.from("firm_user_access").insert({ firm_id: firm.id, user_id: user.id, role: "firm_admin" });
+        firmId = firm.id;
+      }
+
+      // Create the client under the firm
+      const { data: client, error: clientError } = await supabase
+        .from("clients")
+        .insert({
+          firm_id: firmId,
+          name: newClientName.trim(),
+          sector: newClientSector.trim() || null,
+          email: newClientEmail.trim() || null,
+          contact_name: newClientContactName.trim() || null,
+        })
+        .select()
+        .single();
       if (clientError || !client) throw new Error(`Client error: ${clientError?.message}`);
+
       setShowNewClientModal(false);
       setNewClientName(""); setNewClientContactName(""); setNewClientEmail(""); setNewClientSector("");
       await loadSavedData();
