@@ -96,6 +96,7 @@ export default function VatDashboard() {
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [importingXero, setImportingXero] = useState(false);
+  const [sendingAlert, setSendingAlert] = useState(false);
 
   const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
@@ -107,13 +108,12 @@ export default function VatDashboard() {
 
   const [showNewClientModal, setShowNewClientModal] = useState(false);
   const [newClientName, setNewClientName] = useState("");
-  const [newClientSector, setNewClientSector] = useState("");
+  const [newClientContactName, setNewClientContactName] = useState("");
   const [newClientEmail, setNewClientEmail] = useState("");
-  const [newClientSectorField, setNewClientSectorField] = useState("");
+  const [newClientSector, setNewClientSector] = useState("");
   const [newClientSaving, setNewClientSaving] = useState(false);
   const [newClientError, setNewClientError] = useState("");
 
-  // Xero organisation picker state
   const [showOrgPicker, setShowOrgPicker] = useState(false);
   const [orgPickerClientId, setOrgPickerClientId] = useState<string | null>(null);
   const [orgPickerOrgs, setOrgPickerOrgs] = useState<Array<{ tenantId: string; tenantName: string }>>([]);
@@ -129,7 +129,6 @@ export default function VatDashboard() {
       if (session?.user) loadSavedData();
     });
 
-    // Handle Xero OAuth callback params
     const params = new URLSearchParams(window.location.search);
     const xeroStatus = params.get("xero");
     const pickClientId = params.get("clientId");
@@ -141,9 +140,8 @@ export default function VatDashboard() {
         setOrgPickerClientId(pickClientId);
         setOrgPickerOrgs(orgs);
         setShowOrgPicker(true);
-        // Clean up URL
         window.history.replaceState({}, "", "/dashboard");
-      } catch { /* ignore parse errors */ }
+      } catch { /* ignore */ }
     } else if (xeroStatus === "connected") {
       setMessage("Xero connected successfully!");
       window.history.replaceState({}, "", "/dashboard");
@@ -232,6 +230,37 @@ export default function VatDashboard() {
     setImportingXero(false);
   }
 
+  async function sendAlertEmail() {
+    if (!selectedClientId) return;
+    setSendingAlert(true);
+    setMessage("Sending alert emails...");
+    try {
+      const res = await fetch("/api/alerts/send", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: selectedClientId }),
+      });
+      const text = await res.text();
+      let data;
+      try {
+        data = JSON.parse(text);
+      } catch {
+        setMessage(`❌ Server error: ${text.substring(0, 200)}`);
+        setSendingAlert(false);
+        return;
+      }
+      if (data.ok) {
+        setMessage(`✅ Alert sent to: ${data.emailsSent?.join(", ") || "no recipients configured"}`);
+        await loadSavedData();
+      } else {
+        setMessage(`❌ Alert failed: ${data.error || "Unknown error"}`);
+      }
+    } catch (err) {
+      setMessage(`❌ Network error: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    setSendingAlert(false);
+  }
+
   async function signUp() {
     setLoginMessage("");
     if (!supabase) { setLoginMessage("Supabase is not connected."); return; }
@@ -275,7 +304,6 @@ export default function VatDashboard() {
         setOrgPickerClientId(null);
         setOrgPickerOrgs([]);
         await loadSavedData();
-        // Open the client that was just connected
         const connectedClient = savedClients.find((c) => c.id === orgPickerClientId);
         if (connectedClient) await openClient(connectedClient);
         setMessage("Xero connected successfully!");
@@ -302,16 +330,13 @@ export default function VatDashboard() {
       const { data: client, error: clientError } = await supabase.from("clients").insert({
         firm_id: firm.id,
         name: newClientName.trim(),
-        sector: newClientSectorField.trim() || null,
+        sector: newClientSector.trim() || null,
         email: newClientEmail.trim() || null,
-        contact_name: newClientSector.trim() || null,
+        contact_name: newClientContactName.trim() || null,
       }).select().single();
       if (clientError || !client) throw new Error(`Client error: ${clientError?.message}`);
       setShowNewClientModal(false);
-      setNewClientName("");
-      setNewClientSector("");
-      setNewClientEmail("");
-      setNewClientSectorField("");
+      setNewClientName(""); setNewClientContactName(""); setNewClientEmail(""); setNewClientSector("");
       await loadSavedData();
       await openClient(client as SavedClient);
       setMessage(`Client "${client.name}" created. Connect Xero below to import their data.`);
@@ -370,11 +395,6 @@ export default function VatDashboard() {
     : risk === "High Risk" ? "text-orange-600"
     : risk === "Warning" ? "text-yellow-600"
     : "text-green-600";
-  const riskBg =
-    risk === "Registration Required" || risk === "Forward-Look Trigger" ? "bg-red-50"
-    : risk === "High Risk" ? "bg-orange-50"
-    : risk === "Warning" ? "bg-yellow-50"
-    : "bg-green-50";
 
   function latestReviewForClient(clientId: string) { return savedReviews.find((r) => r.client_id === clientId); }
   function latestAlertForClient(clientId: string) { return vatAlerts.find((a) => a.client_id === clientId); }
@@ -387,7 +407,6 @@ export default function VatDashboard() {
   const selectedXeroConnection = selectedClientId ? connectionForClient(selectedClientId, "xero") : undefined;
   const rollingPeriod = months.length > 0 ? `${months[0].month} – ${months[months.length - 1].month}` : "";
 
-  // ── LOGIN SCREEN ─────────────────────────────────────────────
   if (!user) {
     return (
       <main className="min-h-screen bg-[#f2f7f8] p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
@@ -403,9 +422,9 @@ export default function VatDashboard() {
               <button onClick={() => setAuthMode("signup")} className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${authMode === "signup" ? "bg-white shadow text-[#343b46]" : "text-slate-500"}`}>Create account</button>
             </div>
             <label className="block text-sm font-semibold text-[#343b46]">Email address</label>
-            <input type="email" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" value={email} onChange={(e) => setEmail(e.target.value)} />
+            <input type="email" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={email} onChange={(e) => setEmail(e.target.value)} />
             <label className="block text-sm font-semibold text-[#343b46]">Password</label>
-            <input type="password" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input type="password" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={password} onChange={(e) => setPassword(e.target.value)} />
             <button onClick={authMode === "signin" ? signIn : signUp} className="w-full rounded-xl bg-[#343b46] px-4 py-3 font-semibold text-white hover:bg-[#2a303a] transition-colors">
               {authMode === "signin" ? "Sign in" : "Create account"}
             </button>
@@ -416,12 +435,11 @@ export default function VatDashboard() {
     );
   }
 
-  // ── MAIN APP ─────────────────────────────────────────────────
   return (
     <main className="min-h-screen bg-[#f2f7f8] p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
       <div className="mx-auto max-w-7xl">
 
-        {/* Xero Organisation Picker Modal */}
+        {/* Org Picker Modal */}
         {showOrgPicker && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
@@ -433,21 +451,15 @@ export default function VatDashboard() {
               <div className="p-6">
                 <div className="space-y-3">
                   {orgPickerOrgs.map((org) => (
-                    <button
-                      key={org.tenantId}
-                      onClick={() => selectXeroOrg(org.tenantId)}
-                      disabled={orgPickerSaving}
-                      className="w-full rounded-xl border-2 border-slate-200 p-4 text-left hover:border-[#c9af69] hover:bg-[#f2f7f8] transition-all disabled:opacity-50"
-                    >
+                    <button key={org.tenantId} onClick={() => selectXeroOrg(org.tenantId)} disabled={orgPickerSaving}
+                      className="w-full rounded-xl border-2 border-slate-200 p-4 text-left hover:border-[#c9af69] hover:bg-[#f2f7f8] transition-all disabled:opacity-50">
                       <p className="font-semibold text-[#343b46]">{org.tenantName}</p>
                       <p className="text-xs text-slate-400 mt-1">{org.tenantId}</p>
                     </button>
                   ))}
                 </div>
-                <button
-                  onClick={() => { setShowOrgPicker(false); setOrgPickerClientId(null); setOrgPickerOrgs([]); }}
-                  className="mt-4 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8]"
-                >
+                <button onClick={() => { setShowOrgPicker(false); setOrgPickerClientId(null); setOrgPickerOrgs([]); }}
+                  className="mt-4 w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8]">
                   Cancel
                 </button>
               </div>
@@ -467,27 +479,29 @@ export default function VatDashboard() {
               <div className="p-6">
                 <div className="mb-4">
                   <label className="block text-sm font-semibold text-[#343b46]">Client name <span className="text-red-500">*</span></label>
-                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. BMA Leisure Ltd" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" placeholder="e.g. BMA Leisure Ltd" value={newClientName} onChange={(e) => setNewClientName(e.target.value)} autoFocus />
                 </div>
                 <div className="mb-4">
                   <label className="block text-sm font-semibold text-[#343b46]">Contact name <span className="text-slate-400 font-normal">(optional)</span></label>
-                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. John Smith" value={newClientSector} onChange={(e) => setNewClientSector(e.target.value)} />
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" placeholder="e.g. John Smith" value={newClientContactName} onChange={(e) => setNewClientContactName(e.target.value)} />
                 </div>
                 <div className="mb-4">
                   <label className="block text-sm font-semibold text-[#343b46]">Client email <span className="text-slate-400 font-normal">(for VAT alerts)</span></label>
-                  <input type="email" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. client@example.com" value={newClientEmail} onChange={(e) => setNewClientEmail(e.target.value)} />
+                  <input type="email" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" placeholder="e.g. client@example.com" value={newClientEmail} onChange={(e) => setNewClientEmail(e.target.value)} />
                 </div>
                 <div className="mb-4">
                   <label className="block text-sm font-semibold text-[#343b46]">Sector <span className="text-slate-400 font-normal">(optional)</span></label>
-                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none focus:ring-2 focus:ring-[#c9af69]" placeholder="e.g. Hospitality, Retail, Construction" value={newClientSectorField} onChange={(e) => setNewClientSectorField(e.target.value)} />
+                  <input type="text" className="mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" placeholder="e.g. Hospitality, Retail, Construction" value={newClientSector} onChange={(e) => setNewClientSector(e.target.value)} />
                 </div>
                 <div className="mb-6 rounded-xl bg-[#f2f7f8] p-3 text-sm text-[#343b46] border-l-4 border-[#c9af69]">
                   <strong>Next step:</strong> After saving, open the client and click <strong>Connect Xero</strong>.
                 </div>
                 {newClientError && <div className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{newClientError}</div>}
                 <div className="flex gap-3">
-                  <button onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientSector(""); setNewClientEmail(""); setNewClientSectorField(""); setNewClientError(""); }} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8]">Cancel</button>
-                  <button onClick={createNewClient} disabled={newClientSaving || !newClientName.trim()} className="flex-1 rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white hover:bg-[#2a303a] disabled:opacity-50">
+                  <button onClick={() => { setShowNewClientModal(false); setNewClientName(""); setNewClientContactName(""); setNewClientEmail(""); setNewClientSector(""); setNewClientError(""); }}
+                    className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8]">Cancel</button>
+                  <button onClick={createNewClient} disabled={newClientSaving || !newClientName.trim()}
+                    className="flex-1 rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white hover:bg-[#2a303a] disabled:opacity-50">
                     {newClientSaving ? "Saving..." : "Save client"}
                   </button>
                 </div>
@@ -521,7 +535,7 @@ export default function VatDashboard() {
           </div>
         </div>
 
-        {/* ══ MAIN DASHBOARD — no client selected ══ */}
+        {/* MAIN DASHBOARD */}
         {!selectedClientId && (
           <>
             {vatAlerts.length > 0 && (
@@ -543,7 +557,8 @@ export default function VatDashboard() {
                       {vatAlerts.slice(0, 10).map((alert) => {
                         const alertClient = savedClients.find((c) => c.id === alert.client_id);
                         return (
-                          <tr key={alert.id} className="border-b border-orange-100 hover:bg-orange-100 cursor-pointer transition-colors" onClick={() => { const c = savedClients.find((x) => x.id === alert.client_id); if (c) openClient(c); }}>
+                          <tr key={alert.id} className="border-b border-orange-100 hover:bg-orange-100 cursor-pointer transition-colors"
+                            onClick={() => { const c = savedClients.find((x) => x.id === alert.client_id); if (c) openClient(c); }}>
                             <td className="p-2 font-semibold text-[#343b46]">{alertClient?.name || "Unknown"}</td>
                             <td className="p-2 font-bold text-orange-700">{alert.alert_type}</td>
                             <td className="p-2">{Number(alert.threshold_percentage || 0).toFixed(1)}%</td>
@@ -565,10 +580,12 @@ export default function VatDashboard() {
                   <p className="text-sm text-slate-500">Click a client to view their full VAT position.</p>
                 </div>
                 <div className="flex gap-2">
-                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors">
+                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }}
+                    className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors">
                     + New client
                   </button>
-                  <button onClick={loadSavedData} className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-slate-200 transition-colors">
+                  <button onClick={loadSavedData}
+                    className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-slate-200 transition-colors">
                     {loadingSaved ? "Loading..." : "Refresh"}
                   </button>
                 </div>
@@ -577,7 +594,8 @@ export default function VatDashboard() {
               {savedClients.length === 0 ? (
                 <div className="rounded-xl bg-[#f2f7f8] p-10 text-center">
                   <p className="text-slate-500 mb-3">No clients yet. Add your first client to get started.</p>
-                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }} className="rounded-xl bg-[#343b46] px-5 py-2 text-sm font-semibold text-white hover:bg-[#2a303a]">
+                  <button onClick={() => { setShowNewClientModal(true); setNewClientError(""); }}
+                    className="rounded-xl bg-[#343b46] px-5 py-2 text-sm font-semibold text-white hover:bg-[#2a303a]">
                     Add your first client
                   </button>
                 </div>
@@ -617,7 +635,8 @@ export default function VatDashboard() {
                             <td className="p-2">
                               <div className="flex items-center gap-2">
                                 <div className="h-2 w-20 rounded-full bg-slate-100">
-                                  <div className={`h-2 rounded-full ${percent >= 100 ? "bg-red-500" : percent >= 80 ? "bg-yellow-400" : "bg-green-400"}`} style={{ width: `${Math.min(percent, 100)}%` }} />
+                                  <div className={`h-2 rounded-full ${percent >= 100 ? "bg-red-500" : percent >= 80 ? "bg-yellow-400" : "bg-green-400"}`}
+                                    style={{ width: `${Math.min(percent, 100)}%` }} />
                                 </div>
                                 <span className="text-xs">{percent.toFixed(0)}%</span>
                               </div>
@@ -634,7 +653,8 @@ export default function VatDashboard() {
                                 : <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">Not connected</span>}
                             </td>
                             <td className="p-2">
-                              <button onClick={(e) => { e.stopPropagation(); openClient(c); }} className="rounded-lg bg-[#343b46] px-3 py-1 text-xs font-semibold text-white hover:bg-[#2a303a] transition-colors">
+                              <button onClick={(e) => { e.stopPropagation(); openClient(c); }}
+                                className="rounded-lg bg-[#343b46] px-3 py-1 text-xs font-semibold text-white hover:bg-[#2a303a] transition-colors">
                                 Open →
                               </button>
                             </td>
@@ -649,10 +669,9 @@ export default function VatDashboard() {
           </>
         )}
 
-        {/* ══ CLIENT DETAIL VIEW — client selected ══ */}
+        {/* CLIENT DETAIL VIEW */}
         {selectedClientId && (
           <>
-            {/* Summary cards */}
             <div className="mb-6 grid gap-4 md:grid-cols-5">
               <div className="rounded-xl bg-white p-4 shadow-sm border-t-4 border-[#c9af69]">
                 <p className="text-xs text-slate-400 uppercase tracking-wide">Rolling taxable turnover</p>
@@ -662,7 +681,8 @@ export default function VatDashboard() {
                 <p className="text-xs text-slate-400 uppercase tracking-wide">Threshold used</p>
                 <p className="mt-1 text-2xl font-bold text-[#343b46]">{thresholdUsed.toFixed(1)}%</p>
                 <div className="mt-2 h-2 w-full rounded-full bg-slate-100">
-                  <div className={`h-2 rounded-full transition-all ${thresholdUsed >= 100 ? "bg-red-500" : thresholdUsed >= 80 ? "bg-yellow-400" : "bg-green-400"}`} style={{ width: `${Math.min(thresholdUsed, 100)}%` }} />
+                  <div className={`h-2 rounded-full transition-all ${thresholdUsed >= 100 ? "bg-red-500" : thresholdUsed >= 80 ? "bg-yellow-400" : "bg-green-400"}`}
+                    style={{ width: `${Math.min(thresholdUsed, 100)}%` }} />
                 </div>
               </div>
               <div className="rounded-xl bg-white p-4 shadow-sm">
@@ -679,7 +699,6 @@ export default function VatDashboard() {
               </div>
             </div>
 
-            {/* Client alerts */}
             {selectedClientAlerts.length > 0 && (
               <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
                 <h2 className="font-bold text-orange-900">⚠️ Alerts — {clientName}</h2>
@@ -708,7 +727,6 @@ export default function VatDashboard() {
               </div>
             )}
 
-            {/* Xero connection */}
             <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm">
               <h2 className="text-lg font-bold text-[#343b46]">Xero Connection</h2>
               <p className="mt-1 text-sm text-slate-500">Connect Xero and import income automatically.</p>
@@ -726,40 +744,23 @@ export default function VatDashboard() {
                     <button onClick={connectXero} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors">
                       {selectedXeroConnection ? "Reconnect Xero" : "Connect Xero"}
                     </button>
-                    <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero} className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
+                    <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero}
+                      className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
                       {importingXero ? "Importing..." : "Import from Xero"}
                     </button>
-                    <button
-                      onClick={async () => {
-                        setMessage("Sending alert emails...");
-                        const res = await fetch("/api/alerts/send", {
-                          method: "POST",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ clientId: selectedClientId }),
-                        });
-                        const data = await res.json();
-                        if (data.ok) {
-                          setMessage(`✅ Alert emails sent to: ${data.emailsSent?.join(", ") || "no recipients configured"}`);
-                          await loadSavedData();
-                        } else {
-                          setMessage(`❌ Alert failed: ${data.error || "Unknown error"}`);
-                        }
-                      }}
-                      className="rounded-xl border border-[#343b46] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors"
-                    >
-                      Send Alert Email
+                    <button onClick={sendAlertEmail} disabled={sendingAlert}
+                      className="rounded-xl border border-[#343b46] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors disabled:opacity-50">
+                      {sendingAlert ? "Sending..." : "Send Alert Email"}
                     </button>
                   </div>
                 </div>
               </div>
             </div>
 
-            {/* Account mappings */}
             <div className="mb-6">
               <AccountMappings clientId={selectedClientId} clientName={clientName} />
             </div>
 
-            {/* VAT review history */}
             <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm">
               <h2 className="text-lg font-bold text-[#343b46]">VAT Review History</h2>
               {selectedClientReviews.length === 0 ? (
@@ -790,7 +791,6 @@ export default function VatDashboard() {
               )}
             </div>
 
-            {/* Manual turnover entry */}
             <div className="mb-6 grid gap-6 md:grid-cols-2">
               <div className="rounded-2xl bg-white p-6 shadow-sm">
                 <h2 className="mb-3 font-bold text-[#343b46]">Firm</h2>
@@ -830,7 +830,8 @@ export default function VatDashboard() {
                       <td className="p-2 font-semibold text-[#343b46]">{month.month}</td>
                       {(["standard", "reduced", "zero", "exempt", "out"] as VatField[]).map((field) => (
                         <td key={field} className="p-2">
-                          <input type="number" className="w-28 rounded-xl border border-slate-200 p-2 text-sm focus:border-[#c9af69] focus:outline-none text-center" value={month[field]} onChange={(e) => updateValue(index, field, Number(e.target.value))} />
+                          <input type="number" className="w-28 rounded-xl border border-slate-200 p-2 text-sm focus:border-[#c9af69] focus:outline-none text-center"
+                            value={month[field]} onChange={(e) => updateValue(index, field, Number(e.target.value))} />
                         </td>
                       ))}
                       <td className="p-2 font-bold text-[#343b46]">£{(month.standard + month.reduced + month.zero).toLocaleString()}</td>
@@ -853,7 +854,11 @@ export default function VatDashboard() {
               </button>
             </div>
 
-            {message && <p className="mt-4 rounded-xl bg-[#f2f7f8] border-l-4 border-[#c9af69] p-3 text-sm text-[#343b46]">{message}</p>}
+            {message && (
+              <p className={`mt-4 rounded-xl p-3 text-sm border-l-4 ${message.startsWith("✅") ? "bg-green-50 border-green-400 text-green-800" : message.startsWith("❌") ? "bg-red-50 border-red-400 text-red-800" : "bg-[#f2f7f8] border-[#c9af69] text-[#343b46]"}`}>
+                {message}
+              </p>
+            )}
           </>
         )}
 
