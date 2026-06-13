@@ -105,15 +105,6 @@ export async function GET(request: Request) {
   const alertCount = results.filter((r) => r.alertSent).length;
   const errorCount = results.filter((r) => r.status !== "success").length;
 
-  // Log the cron run to Supabase for auditing
-  await supabase.from("vat_reviews").insert({
-    client_id: clientIds[0], // Log against first client as a marker
-    rolling_taxable_turnover: 0,
-    expected_next_30_days: 0,
-    risk_status: "Cron Run",
-    advice_note: `Monthly cron: ${successCount} imported, ${alertCount} alerts sent, ${errorCount} errors`,
-  }).then(() => {}); // Fire and forget
-
   return NextResponse.json({
     ok: true,
     message: `Monthly import complete`,
