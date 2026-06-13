@@ -585,6 +585,16 @@ export default function VatDashboard() {
                   ← All clients
                 </button>
               )}
+              {selectedClientId && (
+                <a
+                  href={`/api/reports/vat?clientId=${selectedClientId}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="rounded-xl bg-white/10 border border-white/20 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors"
+                >
+                  📄 Download Report
+                </a>
+              )}
               <button onClick={signOut} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
                 Sign out
               </button>
