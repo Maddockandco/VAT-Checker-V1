@@ -475,10 +475,6 @@ export default function VatDashboard() {
             <p className="mt-3 text-slate-300">Secure access for accounting firms and client users.</p>
           </div>
           <div className="rounded-3xl bg-white p-6 shadow-sm">
-            <div className="mb-4 flex gap-2 rounded-xl bg-[#f2f7f8] p-1">
-              <button onClick={() => setAuthMode("signin")} className={`flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors ${authMode === "signin" ? "bg-white shadow text-[#343b46]" : "text-slate-500"}`}>Sign in</button>
-              <a href="/signup" className="flex-1 rounded-lg px-4 py-2 text-sm font-semibold transition-colors text-slate-500 hover:text-[#343b46] text-center">Create account</a>
-            </div>
             <label className="block text-sm font-semibold text-[#343b46]">Email address</label>
             <input type="email" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={email} onChange={(e) => setEmail(e.target.value)} />
             <label className="block text-sm font-semibold text-[#343b46]">Password</label>
