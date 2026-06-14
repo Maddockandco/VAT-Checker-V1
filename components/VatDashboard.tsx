@@ -212,6 +212,7 @@ export default function VatDashboard() {
       .from("clients")
       .select("id,name,sector,firm_id,created_at")
       .eq("firm_id", firmId)
+      .eq("archived", false)
       .order("created_at", { ascending: false });
 
     const clientIds = (clients || []).map((c) => c.id);
