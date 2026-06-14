@@ -612,7 +612,30 @@ export default function VatDashboard() {
               <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
                 <h2 className="text-lg font-bold text-orange-900">⚠️ VAT Alerts</h2>
                 <p className="mt-1 text-sm text-orange-700">Clients approaching or exceeding the VAT registration threshold.</p>
-                <div className="mt-4 overflow-x-auto">
+                {/* Mobile: card view */}
+                <div className="mt-4 md:hidden space-y-2">
+                  {vatAlerts.slice(0, 5).map((alert) => {
+                    const alertClient = savedClients.find((c) => c.id === alert.client_id);
+                    return (
+                      <div key={alert.id} className="rounded-xl bg-white p-3 border border-orange-100 cursor-pointer"
+                        onClick={() => { const c = savedClients.find((x) => x.id === alert.client_id); if (c) openClient(c); }}>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="font-semibold text-[#343b46] text-sm">{alertClient?.name || "Unknown"}</span>
+                          <span className="font-bold text-orange-700 text-xs">{alert.alert_type}</span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-slate-500">{Number(alert.threshold_percentage || 0).toFixed(1)}% of threshold</p>
+                          <p className="text-xs text-slate-400">{new Date(alert.created_at).toLocaleDateString("en-GB")}</p>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {vatAlerts.length > 5 && (
+                    <p className="text-xs text-orange-600 text-center pt-1">+{vatAlerts.length - 5} more alerts</p>
+                  )}
+                </div>
+                {/* Desktop: table view */}
+                <div className="mt-4 hidden md:block overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-orange-200 text-left text-xs uppercase tracking-wide text-orange-700">
@@ -670,70 +693,119 @@ export default function VatDashboard() {
                   </button>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b text-left text-xs uppercase tracking-wide text-slate-400">
-                        <th className="pb-3 p-2">Client</th>
-                        <th className="pb-3 p-2">Sector</th>
-                        <th className="pb-3 p-2">Turnover</th>
-                        <th className="pb-3 p-2">% Threshold</th>
-                        <th className="pb-3 p-2">Risk</th>
-                        <th className="pb-3 p-2">Alert</th>
-                        <th className="pb-3 p-2">Xero</th>
-                        <th className="pb-3 p-2"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {savedClients.map((c) => {
-                        const review = latestReviewForClient(c.id);
-                        const latestAlert = latestAlertForClient(c.id);
-                        const turnover = Number(review?.rolling_taxable_turnover || 0);
-                        const percent = (turnover / VAT_THRESHOLD) * 100;
-                        const xeroConn = connectionForClient(c.id, "xero");
-                        const rowRisk = review?.risk_status || "No review";
-                        const rowRiskColour =
-                          turnover >= VAT_THRESHOLD ? "text-red-600 font-bold"
-                          : turnover >= VAT_THRESHOLD * 0.9 ? "text-orange-600 font-semibold"
-                          : turnover >= VAT_THRESHOLD * 0.8 ? "text-yellow-600 font-semibold"
-                          : "text-green-600";
-                        return (
-                          <tr key={c.id} className="border-b hover:bg-[#f2f7f8] cursor-pointer transition-colors" onClick={() => openClient(c)}>
-                            <td className="p-2 font-semibold text-[#343b46]">{c.name}</td>
-                            <td className="p-2 text-slate-500">{c.sector || "—"}</td>
-                            <td className="p-2 font-semibold">£{turnover.toLocaleString()}</td>
-                            <td className="p-2">
-                              <div className="flex items-center gap-2">
-                                <div className="h-2 w-20 rounded-full bg-slate-100">
-                                  <div className={`h-2 rounded-full ${percent >= 100 ? "bg-red-500" : percent >= 80 ? "bg-yellow-400" : "bg-green-400"}`}
-                                    style={{ width: `${Math.min(percent, 100)}%` }} />
-                                </div>
-                                <span className="text-xs">{percent.toFixed(0)}%</span>
-                              </div>
-                            </td>
-                            <td className={`p-2 ${rowRiskColour}`}>{rowRisk}</td>
-                            <td className="p-2">
-                              {latestAlert
-                                ? <span className="rounded-full bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700">{latestAlert.alert_type}</span>
-                                : <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">Clear</span>}
-                            </td>
-                            <td className="p-2">
+                <>
+                  {/* Mobile: card view */}
+                  <div className="md:hidden space-y-3">
+                    {savedClients.map((c) => {
+                      const review = latestReviewForClient(c.id);
+                      const latestAlert = latestAlertForClient(c.id);
+                      const turnover = Number(review?.rolling_taxable_turnover || 0);
+                      const percent = (turnover / VAT_THRESHOLD) * 100;
+                      const xeroConn = connectionForClient(c.id, "xero");
+                      const rowRisk = review?.risk_status || "No review";
+                      const rowRiskColour =
+                        turnover >= VAT_THRESHOLD ? "text-red-600 font-bold"
+                        : turnover >= VAT_THRESHOLD * 0.9 ? "text-orange-600 font-semibold"
+                        : turnover >= VAT_THRESHOLD * 0.8 ? "text-yellow-600 font-semibold"
+                        : "text-green-600";
+                      return (
+                        <div key={c.id} className="rounded-xl bg-[#f2f7f8] p-4 cursor-pointer border border-slate-100 hover:border-[#c9af69] transition-colors"
+                          onClick={() => openClient(c)}>
+                          <div className="flex items-start justify-between mb-2">
+                            <div>
+                              <p className="font-semibold text-[#343b46]">{c.name}</p>
+                              {c.sector && <p className="text-xs text-slate-500 mt-0.5">{c.sector}</p>}
+                            </div>
+                            <span className={`text-sm font-semibold ${rowRiskColour}`}>{rowRisk}</span>
+                          </div>
+                          <div className="flex items-center gap-2 mb-2">
+                            <div className="h-2 flex-1 rounded-full bg-slate-200">
+                              <div className={`h-2 rounded-full ${percent >= 100 ? "bg-red-500" : percent >= 80 ? "bg-yellow-400" : "bg-green-400"}`}
+                                style={{ width: `${Math.min(percent, 100)}%` }} />
+                            </div>
+                            <span className="text-xs font-semibold text-slate-600">{percent.toFixed(0)}%</span>
+                          </div>
+                          <div className="flex items-center justify-between">
+                            <span className="text-sm font-bold text-[#343b46]">£{turnover.toLocaleString()}</span>
+                            <div className="flex gap-2">
                               {xeroConn
-                                ? <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">Connected</span>
-                                : <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">Not connected</span>}
-                            </td>
-                            <td className="p-2">
-                              <button onClick={(e) => { e.stopPropagation(); openClient(c); }}
-                                className="rounded-lg bg-[#343b46] px-3 py-1 text-xs font-semibold text-white hover:bg-[#2a303a] transition-colors">
-                                Open →
-                              </button>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                                ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Xero ✓</span>
+                                : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">No Xero</span>}
+                              {latestAlert
+                                ? <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">{latestAlert.alert_type}</span>
+                                : <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Clear</span>}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* Desktop: table view */}
+                  <div className="hidden md:block overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b text-left text-xs uppercase tracking-wide text-slate-400">
+                          <th className="pb-3 p-2">Client</th>
+                          <th className="pb-3 p-2">Sector</th>
+                          <th className="pb-3 p-2">Turnover</th>
+                          <th className="pb-3 p-2">% Threshold</th>
+                          <th className="pb-3 p-2">Risk</th>
+                          <th className="pb-3 p-2">Alert</th>
+                          <th className="pb-3 p-2">Xero</th>
+                          <th className="pb-3 p-2"></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {savedClients.map((c) => {
+                          const review = latestReviewForClient(c.id);
+                          const latestAlert = latestAlertForClient(c.id);
+                          const turnover = Number(review?.rolling_taxable_turnover || 0);
+                          const percent = (turnover / VAT_THRESHOLD) * 100;
+                          const xeroConn = connectionForClient(c.id, "xero");
+                          const rowRisk = review?.risk_status || "No review";
+                          const rowRiskColour =
+                            turnover >= VAT_THRESHOLD ? "text-red-600 font-bold"
+                            : turnover >= VAT_THRESHOLD * 0.9 ? "text-orange-600 font-semibold"
+                            : turnover >= VAT_THRESHOLD * 0.8 ? "text-yellow-600 font-semibold"
+                            : "text-green-600";
+                          return (
+                            <tr key={c.id} className="border-b hover:bg-[#f2f7f8] cursor-pointer transition-colors" onClick={() => openClient(c)}>
+                              <td className="p-2 font-semibold text-[#343b46]">{c.name}</td>
+                              <td className="p-2 text-slate-500">{c.sector || "—"}</td>
+                              <td className="p-2 font-semibold">£{turnover.toLocaleString()}</td>
+                              <td className="p-2">
+                                <div className="flex items-center gap-2">
+                                  <div className="h-2 w-20 rounded-full bg-slate-100">
+                                    <div className={`h-2 rounded-full ${percent >= 100 ? "bg-red-500" : percent >= 80 ? "bg-yellow-400" : "bg-green-400"}`}
+                                      style={{ width: `${Math.min(percent, 100)}%` }} />
+                                  </div>
+                                  <span className="text-xs">{percent.toFixed(0)}%</span>
+                                </div>
+                              </td>
+                              <td className={`p-2 ${rowRiskColour}`}>{rowRisk}</td>
+                              <td className="p-2">
+                                {latestAlert
+                                  ? <span className="rounded-full bg-orange-100 px-2 py-1 text-xs font-semibold text-orange-700">{latestAlert.alert_type}</span>
+                                  : <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">Clear</span>}
+                              </td>
+                              <td className="p-2">
+                                {xeroConn
+                                  ? <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">Connected</span>
+                                  : <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">Not connected</span>}
+                              </td>
+                              <td className="p-2">
+                                <button onClick={(e) => { e.stopPropagation(); openClient(c); }}
+                                  className="rounded-lg bg-[#343b46] px-3 py-1 text-xs font-semibold text-white hover:bg-[#2a303a] transition-colors">
+                                  Open →
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </>
               )}
             </div>
           </>
@@ -771,8 +843,28 @@ export default function VatDashboard() {
 
             {selectedClientAlerts.length > 0 && (
               <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
-                <h2 className="font-bold text-orange-900">⚠️ Alerts — {clientName}</h2>
-                <div className="mt-3 overflow-x-auto">
+                <div className="flex items-center justify-between mb-3">
+                  <h2 className="font-bold text-orange-900">⚠️ Alerts — {clientName}</h2>
+                  <span className="text-xs text-orange-600 bg-orange-100 rounded-full px-2 py-1">{selectedClientAlerts.length} alerts</span>
+                </div>
+                {/* Mobile: card view */}
+                <div className="md:hidden space-y-2">
+                  {selectedClientAlerts.slice(0, 5).map((alert) => (
+                    <div key={alert.id} className="rounded-xl bg-white p-3 border border-orange-100">
+                      <div className="flex items-center justify-between mb-1">
+                        <span className="font-bold text-orange-700 text-sm">{alert.alert_type}</span>
+                        <span className="text-xs text-slate-400">{Number(alert.threshold_percentage || 0).toFixed(1)}%</span>
+                      </div>
+                      <p className="text-xs text-slate-600 mb-1">{alert.message}</p>
+                      <p className="text-xs text-slate-400">{new Date(alert.created_at).toLocaleDateString("en-GB")}</p>
+                    </div>
+                  ))}
+                  {selectedClientAlerts.length > 5 && (
+                    <p className="text-xs text-orange-600 text-center pt-1">+{selectedClientAlerts.length - 5} more alerts</p>
+                  )}
+                </div>
+                {/* Desktop: table view */}
+                <div className="hidden md:block overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b border-orange-200 text-left text-xs uppercase tracking-wide text-orange-600">
@@ -881,14 +973,15 @@ export default function VatDashboard() {
               </button>
             </div>
 
-            <div className="overflow-x-auto rounded-2xl bg-white p-6 shadow-sm">
-              <table className="w-full text-sm">
+            <p className="text-xs text-slate-400 mb-2 md:hidden">← Scroll to see all columns →</p>
+            <div className="overflow-x-auto rounded-2xl bg-white p-4 md:p-6 shadow-sm">
+              <table className="w-full text-sm min-w-[600px]">
                 <thead>
                   <tr className="border-b text-xs uppercase tracking-wide text-slate-400">
                     <th className="pb-3 p-2 text-left">Month</th>
-                    <th className="pb-3 p-2">Standard-rated</th>
-                    <th className="pb-3 p-2">Reduced-rated</th>
-                    <th className="pb-3 p-2">Zero-rated</th>
+                    <th className="pb-3 p-2">Standard</th>
+                    <th className="pb-3 p-2">Reduced</th>
+                    <th className="pb-3 p-2">Zero</th>
                     <th className="pb-3 p-2">Exempt</th>
                     <th className="pb-3 p-2">Out of scope</th>
                     <th className="pb-3 p-2">Taxable total</th>
@@ -897,14 +990,14 @@ export default function VatDashboard() {
                 <tbody>
                   {months.map((month, index) => (
                     <tr key={month.month} className="border-b hover:bg-[#f2f7f8] transition-colors">
-                      <td className="p-2 font-semibold text-[#343b46]">{month.month}</td>
+                      <td className="p-2 font-semibold text-[#343b46] whitespace-nowrap">{month.month}</td>
                       {(["standard", "reduced", "zero", "exempt", "out"] as VatField[]).map((field) => (
                         <td key={field} className="p-2">
-                          <input type="number" className="w-28 rounded-xl border border-slate-200 p-2 text-sm focus:border-[#c9af69] focus:outline-none text-center"
+                          <input type="number" className="w-24 rounded-xl border border-slate-200 p-2 text-sm focus:border-[#c9af69] focus:outline-none text-center"
                             value={month[field]} onChange={(e) => updateValue(index, field, Number(e.target.value))} />
                         </td>
                       ))}
-                      <td className="p-2 font-bold text-[#343b46]">£{(month.standard + month.reduced + month.zero).toLocaleString()}</td>
+                      <td className="p-2 font-bold text-[#343b46] whitespace-nowrap">£{(month.standard + month.reduced + month.zero).toLocaleString()}</td>
                     </tr>
                   ))}
                 </tbody>
