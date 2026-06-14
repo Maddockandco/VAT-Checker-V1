@@ -98,6 +98,10 @@ export default function VatDashboard() {
   const [importingXero, setImportingXero] = useState(false);
   const [sendingAlert, setSendingAlert] = useState(false);
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
+  const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [archiveDeleteLoading, setArchiveDeleteLoading] = useState(false);
+  const [archiveDeleteMessage, setArchiveDeleteMessage] = useState("");
 
   const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
@@ -297,6 +301,56 @@ export default function VatDashboard() {
       setMessage(`Xero import failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     setImportingXero(false);
+  }
+
+  async function archiveClient() {
+    if (!selectedClientId) return;
+    setArchiveDeleteLoading(true);
+    setArchiveDeleteMessage("");
+    try {
+      const res = await fetch("/api/clients/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: selectedClientId, action: "archive" }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setShowArchiveConfirm(false);
+        await loadSavedData();
+        closeClient();
+        setMessage(`✅ ${data.message}`);
+      } else {
+        setArchiveDeleteMessage(`❌ ${data.error}`);
+      }
+    } catch (err) {
+      setArchiveDeleteMessage(`❌ ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+    setArchiveDeleteLoading(false);
+  }
+
+  async function deleteClient() {
+    if (!selectedClientId) return;
+    setArchiveDeleteLoading(true);
+    setArchiveDeleteMessage("");
+    try {
+      const res = await fetch("/api/clients/archive", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId: selectedClientId, action: "delete" }),
+      });
+      const data = await res.json();
+      if (data.ok) {
+        setShowDeleteConfirm(false);
+        await loadSavedData();
+        closeClient();
+        setMessage(`✅ ${data.message}`);
+      } else {
+        setArchiveDeleteMessage(`❌ ${data.error}`);
+      }
+    } catch (err) {
+      setArchiveDeleteMessage(`❌ ${err instanceof Error ? err.message : "Unknown error"}`);
+    }
+    setArchiveDeleteLoading(false);
   }
 
   async function sendAlertEmail() {
@@ -1083,7 +1137,96 @@ export default function VatDashboard() {
               <button onClick={closeClient} className="rounded-xl border border-[#c9af69] px-6 py-3 font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors">
                 ← Back to all clients
               </button>
+              <div className="ml-auto flex gap-2">
+                <button
+                  onClick={() => setShowArchiveConfirm(true)}
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-500 hover:border-yellow-400 hover:text-yellow-700 hover:bg-yellow-50 transition-colors"
+                >
+                  📦 Archive client
+                </button>
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-500 hover:border-red-400 hover:text-red-700 hover:bg-red-50 transition-colors"
+                >
+                  🗑️ Delete client
+                </button>
+              </div>
             </div>
+
+            {/* Archive confirmation modal */}
+            {showArchiveConfirm && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+                  <div className="rounded-t-2xl bg-yellow-500 px-6 py-5 text-white">
+                    <h2 className="text-xl font-bold">📦 Archive {clientName}?</h2>
+                    <p className="mt-1 text-sm text-yellow-100">This client will be hidden from your dashboard</p>
+                  </div>
+                  <div className="p-6">
+                    <p className="text-sm text-slate-600 mb-4">Archiving this client will:</p>
+                    <ul className="text-sm text-slate-600 space-y-2 mb-6">
+                      <li>✅ Hide them from your active client list</li>
+                      <li>✅ Retain all data for <strong>6 years</strong> (Companies Act requirement)</li>
+                      <li>✅ Send you a confirmation email</li>
+                      <li>✅ Send a reminder email 30 days before data is deleted</li>
+                      <li>✅ Auto-delete all data after 6 years</li>
+                    </ul>
+                    <div className="rounded-xl bg-yellow-50 border-l-4 border-yellow-400 p-3 text-sm text-yellow-800 mb-6">
+                      You can restore an archived client at any time before the 6-year period expires.
+                    </div>
+                    {archiveDeleteMessage && (
+                      <p className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{archiveDeleteMessage}</p>
+                    )}
+                    <div className="flex gap-3">
+                      <button onClick={() => { setShowArchiveConfirm(false); setArchiveDeleteMessage(""); }} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                        Cancel
+                      </button>
+                      <button
+                        onClick={archiveClient}
+                        disabled={archiveDeleteLoading}
+                        className="flex-1 rounded-xl bg-yellow-500 px-4 py-3 text-sm font-semibold text-white hover:bg-yellow-600 disabled:opacity-50"
+                      >
+                        {archiveDeleteLoading ? "Archiving..." : "Yes, archive client"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Delete confirmation modal */}
+            {showDeleteConfirm && (
+              <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
+                <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
+                  <div className="rounded-t-2xl bg-red-600 px-6 py-5 text-white">
+                    <h2 className="text-xl font-bold">🗑️ Delete {clientName}?</h2>
+                    <p className="mt-1 text-sm text-red-100">This action cannot be undone</p>
+                  </div>
+                  <div className="p-6">
+                    <div className="rounded-xl bg-red-50 border-l-4 border-red-400 p-3 text-sm text-red-800 mb-4">
+                      <strong>Warning:</strong> This will permanently delete all data for {clientName} including all imported transactions, VAT reviews, account mappings and alerts. This cannot be recovered.
+                    </div>
+                    <p className="text-sm text-slate-600 mb-6">
+                      If you need to keep records, consider <strong>archiving</strong> instead — data is retained for 6 years.
+                    </p>
+                    {archiveDeleteMessage && (
+                      <p className="mb-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{archiveDeleteMessage}</p>
+                    )}
+                    <div className="flex gap-3">
+                      <button onClick={() => { setShowDeleteConfirm(false); setArchiveDeleteMessage(""); }} className="flex-1 rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-700 hover:bg-slate-50">
+                        Cancel
+                      </button>
+                      <button
+                        onClick={deleteClient}
+                        disabled={archiveDeleteLoading}
+                        className="flex-1 rounded-xl bg-red-600 px-4 py-3 text-sm font-semibold text-white hover:bg-red-700 disabled:opacity-50"
+                      >
+                        {archiveDeleteLoading ? "Deleting..." : "Yes, permanently delete"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {message && (
               <p className={`mt-4 rounded-xl p-3 text-sm border-l-4 ${message.startsWith("✅") ? "bg-green-50 border-green-400 text-green-800" : message.startsWith("❌") ? "bg-red-50 border-red-400 text-red-800" : "bg-[#f2f7f8] border-[#c9af69] text-[#343b46]"}`}>
