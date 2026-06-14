@@ -566,6 +566,11 @@ export default function VatDashboard() {
   }
 
   if (!user) {
+    return (
+      <main className="min-h-screen bg-[#f2f7f8] p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
+        <div className="mx-auto max-w-xl">
+          <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
+            <p className="text-sm text-[#c9af69] font-semibold tracking-wide uppercase">Maddock & Co.</p>
             <h1 className="mt-2 text-4xl font-bold">VAT Checker</h1>
             <p className="mt-3 text-slate-300">Secure access for accounting firms and client users.</p>
           </div>
