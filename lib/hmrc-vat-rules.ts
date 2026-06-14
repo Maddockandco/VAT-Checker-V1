@@ -27,7 +27,7 @@ export type ClassificationResult = {
 // These are Xero's built-in UK tax codes
 const XERO_TAX_TYPE_MAP: Record<string, VatClassification> = {
   OUTPUT: "standard_rated",         // 20% VAT on Income
-  OUTPUT2: "reduced_rated",         // 5% VAT on Income
+  OUTPUT2: "needs_review",          // 5% VAT — reduced rate is rare, flag for review
   ZERORATEDOUTPUT: "zero_rated",    // 0% Zero Rated Income
   EXEMPTOUTPUT: "exempt",           // Exempt Income
   NONE: "out_of_scope",             // No VAT
@@ -181,6 +181,19 @@ export function classifyAccount(params: {
   // Step 2: Use Xero tax type if we recognise it
   if (taxTypeUpper && XERO_TAX_TYPE_MAP[taxTypeUpper]) {
     const classification = XERO_TAX_TYPE_MAP[taxTypeUpper];
+
+    // OUTPUT2 (5% reduced rate) is rare in practice — flag for review
+    // Common causes: domestic fuel/power, residential property conversions,
+    // children's car seats, sanitary products. Most businesses won't have this.
+    if (taxTypeUpper === "OUTPUT2") {
+      return {
+        classification: "needs_review",
+        confidence: "low",
+        flagSeverity: "review_required",
+        flagReason: "Xero has this coded as OUTPUT2 (5% reduced rate). Reduced rate is rare — confirm this is genuinely reduced rated (e.g. domestic fuel, residential conversions) or recode as standard rated (20%).",
+        hmrcGuidance: "HMRC VAT Notice 700/17: The reduced rate of 5% applies to a limited range of supplies including domestic fuel and power, energy-saving materials, children's car seats and a few others. Most business income is standard rated at 20%.",
+      };
+    }
 
     // Flag Other Income accounts coded as standard rated — common mistake
     if (
