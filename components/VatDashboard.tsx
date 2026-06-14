@@ -121,7 +121,18 @@ export default function VatDashboard() {
   useEffect(() => {
     if (!supabase) return;
     supabase.auth.getUser().then(({ data }) => {
-      if (data.user) { setUser(data.user); loadSavedData(); }
+      if (data.user) {
+        setUser(data.user);
+        loadSavedData().then((clients) => {
+          // After loading, check if a client is in the URL and auto-open it
+          const params = new URLSearchParams(window.location.search);
+          const clientParam = params.get("client");
+          if (clientParam && clients) {
+            const clientToOpen = clients.find((c: SavedClient) => c.id === clientParam);
+            if (clientToOpen) openClient(clientToOpen);
+          }
+        });
+      }
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user || null);
@@ -153,12 +164,11 @@ export default function VatDashboard() {
   }, []);
 
   async function loadSavedData() {
-    if (!supabase) return;
+    if (!supabase) return [];
     setLoadingSaved(true);
 
-    // Get the current user's firm
     const { data: { user: currentUser } } = await supabase.auth.getUser();
-    if (!currentUser) { setLoadingSaved(false); return; }
+    if (!currentUser) { setLoadingSaved(false); return []; }
 
     const { data: firmAccess } = await supabase
       .from("firm_user_access")
@@ -170,12 +180,11 @@ export default function VatDashboard() {
     if (!firmAccess?.firm_id) {
       setSavedClients([]); setSavedReviews([]); setAccountingConnections([]); setVatAlerts([]);
       setLoadingSaved(false);
-      return;
+      return [];
     }
 
     const firmId = firmAccess.firm_id;
 
-    // Only load clients belonging to this firm
     const { data: clients } = await supabase
       .from("clients")
       .select("id,name,sector,firm_id,created_at")
@@ -184,7 +193,6 @@ export default function VatDashboard() {
 
     const clientIds = (clients || []).map((c) => c.id);
 
-    // Load reviews, connections and alerts only for this firm's clients
     const { data: reviews } = clientIds.length > 0
       ? await supabase.from("vat_reviews").select("id,client_id,rolling_taxable_turnover,risk_status,created_at").in("client_id", clientIds).order("created_at", { ascending: false })
       : { data: [] };
@@ -202,6 +210,7 @@ export default function VatDashboard() {
     setAccountingConnections((connections || []) as AccountingConnection[]);
     setVatAlerts((alerts || []) as VatAlert[]);
     setLoadingSaved(false);
+    return (clients || []) as SavedClient[];
   }
 
   async function openClient(client: SavedClient) {
@@ -210,6 +219,8 @@ export default function VatDashboard() {
     setClientName(client.name);
     setSector(client.sector || "");
     setMessage("");
+    // Persist client in URL so page refresh keeps you on the same client
+    window.history.replaceState({}, "", `/dashboard?client=${client.id}`);
     const baseMonths = getLastCompleted12Months();
     const { data: entries } = await supabase
       .from("turnover_entries")
@@ -237,6 +248,8 @@ export default function VatDashboard() {
     setClientName("");
     setMessage("");
     setMonths(getLastCompleted12Months());
+    // Clear client from URL
+    window.history.replaceState({}, "", "/dashboard");
   }
 
   function refreshRollingPeriod() {
