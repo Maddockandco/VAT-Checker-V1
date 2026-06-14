@@ -183,8 +183,6 @@ export function classifyAccount(params: {
     const classification = XERO_TAX_TYPE_MAP[taxTypeUpper];
 
     // OUTPUT2 (5% reduced rate) is rare in practice — flag for review
-    // Common causes: domestic fuel/power, residential property conversions,
-    // children's car seats, sanitary products. Most businesses won't have this.
     if (taxTypeUpper === "OUTPUT2") {
       return {
         classification: "needs_review",
@@ -192,6 +190,21 @@ export function classifyAccount(params: {
         flagSeverity: "review_required",
         flagReason: "Xero has this coded as OUTPUT2 (5% reduced rate). Reduced rate is rare — confirm this is genuinely reduced rated (e.g. domestic fuel, residential conversions) or recode as standard rated (20%).",
         hmrcGuidance: "HMRC VAT Notice 700/17: The reduced rate of 5% applies to a limited range of supplies including domestic fuel and power, energy-saving materials, children's car seats and a few others. Most business income is standard rated at 20%.",
+      };
+    }
+
+    // NONE on a REVENUE or SALES account likely means the business is not VAT registered
+    // We still need to classify what the income WOULD be for threshold monitoring purposes
+    if (
+      taxTypeUpper === "NONE" &&
+      (accountTypeUpper === "REVENUE" || accountTypeUpper === "SALES")
+    ) {
+      return {
+        classification: "needs_review",
+        confidence: "low",
+        flagSeverity: "review_required",
+        flagReason: "This account has no VAT code set (likely unregistered business). For VAT threshold monitoring, please confirm what VAT rate would apply if this business were registered — usually Standard rated (20%) for most trading income.",
+        hmrcGuidance: "HMRC VAT Notice 700: Even unregistered businesses must monitor their taxable turnover against the registration threshold. Classify this account based on the nature of the supply, not the current VAT registration status.",
       };
     }
 
@@ -204,10 +217,8 @@ export function classifyAccount(params: {
         classification: "needs_review",
         confidence: "low",
         flagSeverity: "review_required",
-        flagReason:
-          "Other Income account coded as standard rated — please confirm this is taxable income",
-        hmrcGuidance:
-          "HMRC VAT Notice 700: Confirm that this Other Income account relates to taxable supplies before including in VAT turnover.",
+        flagReason: "Other Income account coded as standard rated — please confirm this is taxable income",
+        hmrcGuidance: "HMRC VAT Notice 700: Confirm that this Other Income account relates to taxable supplies before including in VAT turnover.",
       };
     }
 
