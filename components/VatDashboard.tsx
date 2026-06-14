@@ -517,6 +517,13 @@ export default function VatDashboard() {
             </p>
             {loginMessage && <p className="mt-4 rounded-xl bg-red-50 p-3 text-sm text-red-700">{loginMessage}</p>}
           </div>
+          <p className="mt-4 text-center text-xs text-slate-400">
+            <a href="/terms" className="hover:text-[#343b46]">Terms of Service</a>
+            {" · "}
+            <a href="/privacy" className="hover:text-[#343b46]">Privacy Policy</a>
+            {" · "}
+            <a href="https://www.maddockandco.com" className="hover:text-[#343b46]">maddockandco.com</a>
+          </p>
         </div>
       </main>
     );
@@ -1073,6 +1080,18 @@ export default function VatDashboard() {
         )}
 
       </div>
+
+      {/* Footer */}
+      <div className="mt-8 text-center text-xs text-slate-400">
+        <a href="/terms" className="hover:text-[#343b46]">Terms of Service</a>
+        {" · "}
+        <a href="/privacy" className="hover:text-[#343b46]">Privacy Policy</a>
+        {" · "}
+        <a href="https://www.maddockandco.com" className="hover:text-[#343b46]">maddockandco.com</a>
+        {" · "}
+        <span>Powered by Maddock & Co. VAT Checker</span>
+      </div>
+
     </main>
   );
 }
