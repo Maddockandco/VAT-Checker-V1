@@ -96,6 +96,7 @@ export default function VatDashboard() {
   const [saving, setSaving] = useState(false);
   const [importingXero, setImportingXero] = useState(false);
   const [sendingAlert, setSendingAlert] = useState(false);
+  const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
 
   const [savedClients, setSavedClients] = useState<SavedClient[]>([]);
   const [savedReviews, setSavedReviews] = useState<SavedReview[]>([]);
@@ -184,6 +185,19 @@ export default function VatDashboard() {
     }
 
     const firmId = firmAccess.firm_id;
+
+    const { data: firmData } = await supabase
+      .from("firms")
+      .select("trial_ends_at")
+      .eq("id", firmId)
+      .single();
+
+    if (firmData?.trial_ends_at) {
+      const daysLeft = Math.ceil(
+        (new Date(firmData.trial_ends_at).getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+      );
+      setTrialDaysLeft(daysLeft > 0 ? daysLeft : 0);
+    }
 
     const { data: clients } = await supabase
       .from("clients")
@@ -491,7 +505,10 @@ export default function VatDashboard() {
             <label className="block text-sm font-semibold text-[#343b46]">Email address</label>
             <input type="email" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={email} onChange={(e) => setEmail(e.target.value)} />
             <label className="block text-sm font-semibold text-[#343b46]">Password</label>
-            <input type="password" className="mb-4 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <input type="password" className="mb-1 mt-1 w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none" value={password} onChange={(e) => setPassword(e.target.value)} />
+            <div className="mb-4 text-right">
+              <a href="/reset-password" className="text-xs text-slate-400 hover:text-[#c9af69]">Forgot password?</a>
+            </div>
             <button onClick={signIn} className="w-full rounded-xl bg-[#343b46] px-4 py-3 font-semibold text-white hover:bg-[#2a303a] transition-colors">
               Sign in
             </button>
@@ -617,6 +634,23 @@ export default function VatDashboard() {
             </div>
           </div>
         </div>
+
+        {/* Trial expiry banner */}
+        {trialDaysLeft !== null && trialDaysLeft <= 14 && (
+          <div className={`mb-6 rounded-2xl p-4 flex items-center justify-between ${trialDaysLeft <= 3 ? "bg-red-50 border border-red-200" : "bg-yellow-50 border border-yellow-200"}`}>
+            <div>
+              <p className={`font-semibold text-sm ${trialDaysLeft <= 3 ? "text-red-800" : "text-yellow-800"}`}>
+                {trialDaysLeft === 0 ? "⚠️ Your free trial has expired" : `⏰ Your free trial expires in ${trialDaysLeft} day${trialDaysLeft === 1 ? "" : "s"}`}
+              </p>
+              <p className={`text-xs mt-1 ${trialDaysLeft <= 3 ? "text-red-600" : "text-yellow-600"}`}>
+                Upgrade to keep access to all your clients and automated imports.
+              </p>
+            </div>
+            <a href="/billing" className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors whitespace-nowrap ml-4">
+              Upgrade now →
+            </a>
+          </div>
+        )}
 
         {/* MAIN DASHBOARD */}
         {!selectedClientId && (
