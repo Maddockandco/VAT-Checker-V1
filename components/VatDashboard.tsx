@@ -82,6 +82,7 @@ function getLastCompleted12Months(): MonthRow[] {
 
 export default function VatDashboard() {
   const [user, setUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [loginMessage, setLoginMessage] = useState("");
@@ -133,7 +134,11 @@ export default function VatDashboard() {
             if (clientToOpen) openClient(clientToOpen);
           }
         });
+      } else {
+        // No active session — show the login screen (already handled by !user check below)
+        setUser(null);
       }
+      setAuthLoading(false);
     });
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session?.user || null);
@@ -492,12 +497,21 @@ export default function VatDashboard() {
   const selectedXeroConnection = selectedClientId ? connectionForClient(selectedClientId, "xero") : undefined;
   const rollingPeriod = months.length > 0 ? `${months[0].month} – ${months[months.length - 1].month}` : "";
 
-  if (!user) {
+  if (authLoading) {
     return (
-      <main className="min-h-screen bg-[#f2f7f8] p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
-        <div className="mx-auto max-w-xl">
-          <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
-            <p className="text-sm text-[#c9af69] font-semibold tracking-wide uppercase">Maddock & Co.</p>
+      <main className="min-h-screen bg-[#f2f7f8] flex items-center justify-center" style={{ fontFamily: "'Open Sans', sans-serif" }}>
+        <div className="text-center">
+          <div className="rounded-2xl bg-[#343b46] p-8 text-white mb-4 inline-block">
+            <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-widest mb-1">Maddock & Co.</p>
+            <p className="text-xl font-bold">VAT Checker</p>
+          </div>
+          <p className="text-slate-400 text-sm">Loading...</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!user) {
             <h1 className="mt-2 text-4xl font-bold">VAT Checker</h1>
             <p className="mt-3 text-slate-300">Secure access for accounting firms and client users.</p>
           </div>
