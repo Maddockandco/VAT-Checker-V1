@@ -188,15 +188,9 @@ export default function SignupPage() {
           </div>
 
           <div className="mb-6 flex items-start gap-3">
-            <input
-              type="checkbox"
-              id="terms"
-              className="mt-1 rounded"
-              checked={agreedToTerms}
-              onChange={(e) => setAgreedToTerms(e.target.checked)}
-            />
+            <input type="checkbox" id="terms" className="mt-1 rounded" checked={agreedToTerms} onChange={(e) => setAgreedToTerms(e.target.checked)} />
             <label htmlFor="terms" className="text-sm text-slate-500">
-              I agree to the <span className="text-[#343b46] font-semibold cursor-pointer">terms of service</span> and <span className="text-[#343b46] font-semibold cursor-pointer">privacy policy</span>
+              I agree to the <a href="/terms" target="_blank" className="text-[#343b46] font-semibold hover:text-[#c9af69]">terms of service</a> and <a href="/privacy" target="_blank" className="text-[#343b46] font-semibold hover:text-[#c9af69]">privacy policy</a>
             </label>
           </div>
 
