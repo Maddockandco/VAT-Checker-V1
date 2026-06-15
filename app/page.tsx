@@ -90,8 +90,9 @@ export default function LandingPage() {
             </a>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <a href="#pricing" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Features</a>
+            <a href="#features" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Features</a>
             <Link href="/pricing" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Pricing</Link>
+            <Link href="/about" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>About</Link>
             <Link href="/dashboard" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Sign in</Link>
             <Link href="/signup" style={{
               backgroundColor: "#c9af69", color: "#343b46", fontSize: 14, fontWeight: 700,
@@ -390,6 +391,7 @@ export default function LandingPage() {
           <div style={{ display: "flex", gap: 24 }}>
             <Link href="/terms" style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, textDecoration: "none" }}>Terms</Link>
             <Link href="/privacy" style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, textDecoration: "none" }}>Privacy</Link>
+            <Link href="/about" style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, textDecoration: "none" }}>About</Link>
             <a href="https://www.maddockandco.com" style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, textDecoration: "none" }}>maddockandco.com</a>
             <Link href="/dashboard" style={{ color: "rgba(255,255,255,0.4)", fontSize: 13, textDecoration: "none" }}>Sign in</Link>
           </div>
