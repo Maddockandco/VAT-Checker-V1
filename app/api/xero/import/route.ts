@@ -263,11 +263,20 @@ export async function GET(request: Request) {
     }
 
     // ── 2. BANK TRANSACTIONS (receipts AND refunds) ────────────
-    // RECEIVE = income, SPEND on income accounts = refunds
-    // Use NET amount to match P&L
+    // RECEIVE = income, SPEND on income accounts = refunds only if the account
+    // also has RECEIVE transactions (prevents picking up internal movements)
+    // First pass: collect all account codes that have RECEIVE transactions
+    const receiveAccountCodes = new Set<string>();
+
     for (const txnType of ["RECEIVE", "SPEND"]) {
       let bankPage = 1;
       let bankDone = false;
+
+      // First pass — collect RECEIVE account codes
+      if (txnType === "SPEND" && receiveAccountCodes.size === 0) {
+        // No RECEIVE transactions found — skip SPEND entirely
+        break;
+      }
 
       while (!bankDone) {
         const bankRes = await xeroGet(
@@ -297,11 +306,22 @@ export async function GET(request: Request) {
             const classification = accountMap.get(code);
             if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
 
+            // For SPEND transactions, only include if this account also has RECEIVE transactions
+            // This prevents picking up internal bank movements that aren't genuine refunds
+            if (txnType === "SPEND" && !receiveAccountCodes.has(code)) {
+              totalLinesSkipped++;
+              continue;
+            }
+
+            // Track RECEIVE account codes for SPEND filtering
+            if (txnType === "RECEIVE") {
+              receiveAccountCodes.add(code);
+            }
+
             const rawAmount = safeNumber(line.LineAmount ?? line.UnitAmount ?? 0);
             const taxAmount = safeNumber(line.TaxAmount ?? 0);
             if (rawAmount === 0) continue;
 
-            // If Inclusive: subtract VAT to get net. If Exclusive: already net
             const absGross = Math.abs(rawAmount);
             const absTax = Math.abs(taxAmount);
             const netRaw = isInclusive ? absGross - absTax : absGross;
@@ -365,15 +385,18 @@ export async function GET(request: Request) {
           if (!classification || classification === "excluded") { totalLinesSkipped++; continue; }
 
           const lineAmount = safeNumber(line.LineAmount);
-          // Only CREDIT lines (negative) = income being posted
-          if (lineAmount >= 0) { totalLinesSkipped++; continue; }
+          // Skip zero lines
+          if (lineAmount === 0) { totalLinesSkipped++; continue; }
 
           const taxAmount = safeNumber(line.TaxAmount ?? 0);
           const absGross = Math.abs(lineAmount);
           const absTax = Math.abs(taxAmount);
-          // If Inclusive: subtract VAT to get net. If Exclusive: already net, use as-is
-          const netAmount = isInclusive ? absGross - absTax : absGross;
-          if (netAmount === 0) continue;
+          const netGross = isInclusive ? absGross - absTax : absGross;
+          if (netGross === 0) continue;
+
+          // CREDIT lines (negative LineAmount) = income posted — positive amount in our system
+          // DEBIT lines (positive LineAmount) = income reversed/corrected — negative amount in our system
+          const amount = lineAmount < 0 ? netGross : -netGross;
 
           importedLines.push({
             client_id: clientId,
@@ -386,7 +409,7 @@ export async function GET(request: Request) {
             description: line.Description || journal.Narration || null,
             tax_type: line.TaxType || null,
             vat_classification: classification,
-            amount: Number(netAmount.toFixed(2)),
+            amount: Number(amount.toFixed(2)),
             updated_at: new Date().toISOString(),
           });
           totalLinesImported++;
