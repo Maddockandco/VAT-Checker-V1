@@ -772,16 +772,16 @@ export default function VatDashboard() {
                   📄 Report
                 </a>
               )}
-              <a href="/" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
-                🏠
+              <a href="/" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Back to home">
+                🏠 <span className="hidden sm:inline">Home</span>
               </a>
-              <a href="/settings" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
-                ⚙️
+              <a href="/settings" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Firm settings">
+                ⚙️ <span className="hidden sm:inline">Settings</span>
               </a>
-              <a href="/billing" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
-                💳
+              <a href="/billing" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Billing & plans">
+                💳 <span className="hidden sm:inline">Billing</span>
               </a>
-              <button onClick={signOut} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
+              <button onClick={signOut} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Sign out">
                 Sign out
               </button>
             </div>
