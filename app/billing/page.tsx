@@ -164,6 +164,29 @@ export default function BillingPage() {
   const [clientCount, setClientCount] = useState(0);
   const [message, setMessage] = useState("");
   const [visible, setVisible] = useState(false);
+  const [barsVisible, setBarsVisible] = useState(false);
+  const [countedPrices, setCountedPrices] = useState<Record<string, number>>({});
+
+  // Count up animation for prices
+  function animatePrices() {
+    PLANS.forEach((plan) => {
+      if (plan.price === 0) return;
+      let start = 0;
+      const end = plan.price;
+      const duration = 1000;
+      const steps = 30;
+      const increment = end / steps;
+      const interval = setInterval(() => {
+        start += increment;
+        if (start >= end) {
+          setCountedPrices(prev => ({ ...prev, [plan.id]: end }));
+          clearInterval(interval);
+        } else {
+          setCountedPrices(prev => ({ ...prev, [plan.id]: Math.floor(start) }));
+        }
+      }, duration / steps);
+    });
+  }
 
   useEffect(() => {
     loadBillingData();
@@ -176,7 +199,11 @@ export default function BillingPage() {
       window.history.replaceState({}, "", "/billing");
     }
     // Trigger entrance animations
-    setTimeout(() => setVisible(true), 100);
+    setTimeout(() => {
+      setVisible(true);
+      animatePrices();
+    }, 100);
+    setTimeout(() => setBarsVisible(true), 800);
   }, []);
 
   async function loadBillingData() {
@@ -360,7 +387,7 @@ export default function BillingPage() {
 
                   <div className="mb-1">
                     <span className="text-3xl font-bold text-[#343b46]">
-                      {plan.price === 0 ? "Free" : `£${plan.price}`}
+                      {plan.price === 0 ? "Free" : `£${countedPrices[plan.id] ?? plan.price}`}
                     </span>
                     {plan.price > 0 && <span className="text-slate-400 text-xs">/month</span>}
                   </div>
@@ -412,24 +439,26 @@ export default function BillingPage() {
         <div className={`mb-8 rounded-2xl bg-white p-6 shadow-sm transition-all duration-700 delay-700 ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
           <h3 className="text-sm font-bold text-[#343b46] mb-4">Cost per client — the more clients, the better value</h3>
           <div className="space-y-3">
-            {PLANS.filter(p => p.price > 0 && p.clientLimit).map((plan) => {
+            {PLANS.filter(p => p.price > 0 && p.clientLimit).map((plan, i) => {
               const perClient = plan.price / (plan.clientLimit || 1);
               const maxPerClient = 9;
-              const barWidth = Math.max(10, 100 - ((perClient / maxPerClient) * 100) + 10);
+              const barWidth = Math.max(15, 100 - ((perClient / maxPerClient) * 85));
               return (
                 <div key={plan.id} className="flex items-center gap-3">
-                  <span className="text-xs text-slate-500 w-20 text-right">{plan.name}</span>
-                  <div className="flex-1 bg-slate-100 rounded-full h-2">
+                  <span className="text-xs text-slate-500 w-24 text-right font-medium">{plan.name}</span>
+                  <div className="flex-1 bg-slate-100 rounded-full h-3 overflow-hidden">
                     <div
-                      className="h-2 rounded-full transition-all duration-1000"
+                      className="h-3 rounded-full"
                       style={{
-                        width: visible ? `${barWidth}%` : "0%",
+                        width: barsVisible ? `${barWidth}%` : "0%",
                         backgroundColor: plan.color,
-                        transitionDelay: `${800 + PLANS.indexOf(plan) * 100}ms`
+                        transition: `width 1000ms ease ${i * 120}ms`,
                       }}
                     />
                   </div>
-                  <span className="text-xs font-semibold text-slate-600 w-24">£{perClient.toFixed(2)}/client</span>
+                  <span className="text-xs font-semibold w-24" style={{ color: plan.color }}>
+                    £{perClient.toFixed(2)}/client
+                  </span>
                 </div>
               );
             })}
