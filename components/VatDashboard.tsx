@@ -438,7 +438,9 @@ export default function VatDashboard() {
 
   function getClientLimit(): number {
     if (subscriptionStatus === "active") {
-      if (currentPlan === "practice") return Infinity;
+      if (currentPlan === "unlimited") return Infinity;
+      if (currentPlan === "growth_max") return 40;
+      if (currentPlan === "growth_pro") return 30;
       if (currentPlan === "growth") return 20;
       if (currentPlan === "starter") return 10;
       if (currentPlan === "solo") return 1;
