@@ -3,6 +3,7 @@
 import React, { useEffect, useState } from "react";
 import { createClient, type User } from "@supabase/supabase-js";
 import AccountMappings from "@/components/AccountMappings";
+import SoloDashboard from "@/components/SoloDashboard";
 
 // Maddock & Co brand colours
 // Primary dark:  #343b46
@@ -100,6 +101,7 @@ export default function VatDashboard() {
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>("trial");
   const [currentPlan, setCurrentPlan] = useState<string | null>(null);
+  const [firmId, setFirmId] = useState<string | null>(null);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [archiveDeleteLoading, setArchiveDeleteLoading] = useState(false);
@@ -196,6 +198,7 @@ export default function VatDashboard() {
     }
 
     const firmId = firmAccess.firm_id;
+    setFirmId(firmId);
 
     const { data: firmData } = await supabase
       .from("firms")
@@ -619,6 +622,19 @@ export default function VatDashboard() {
           </div>
         </div>
       </main>
+    );
+  }
+
+  // Solo/Free plan — show simplified single-business dashboard
+  if (user && firmId && (currentPlan === "solo" || currentPlan === "free")) {
+    return (
+      <SoloDashboard
+        userId={user.id}
+        firmId={firmId}
+        userEmail={user.email || ""}
+        plan={currentPlan || "free"}
+        onSignOut={signOut}
+      />
     );
   }
 
