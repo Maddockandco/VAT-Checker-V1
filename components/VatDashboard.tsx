@@ -626,10 +626,19 @@ export default function VatDashboard() {
     return (
       <main className="min-h-screen bg-[#f2f7f8] p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
         <div className="mx-auto max-w-xl">
+          {/* Back to home */}
+          <div className="mb-4 text-center">
+            <a href="/" className="inline-flex items-center gap-2 text-sm text-slate-500 hover:text-[#343b46] transition-colors">
+              ← Back to VATwatchHQ
+            </a>
+          </div>
           <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
-            <p className="text-sm text-[#c9af69] font-semibold tracking-wide uppercase">Maddock & Co.</p>
-            <h1 className="mt-2 text-4xl font-bold">VAT Checker</h1>
-            <p className="mt-3 text-slate-300">Secure access for accounting firms and client users.</p>
+            <div className="flex items-center gap-1 mb-2">
+              <span className="text-[#c9af69] font-bold text-xl tracking-tight">VAT</span>
+              <span className="text-white font-bold text-xl tracking-tight">watchHQ</span>
+            </div>
+            <h1 className="mt-1 text-3xl font-bold">Sign in</h1>
+            <p className="mt-2 text-slate-300 text-sm">Welcome back — sign in to your account.</p>
           </div>
           <div className="rounded-3xl bg-white p-6 shadow-sm">
             <label className="block text-sm font-semibold text-[#343b46]">Email address</label>
@@ -696,7 +705,10 @@ export default function VatDashboard() {
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
             <div className="w-full max-w-md rounded-2xl bg-white shadow-2xl">
               <div className="rounded-t-2xl bg-[#343b46] px-6 py-5 text-white">
-                <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-wide mb-1">Maddock & Co. VAT Checker</p>
+                <div className="flex items-center gap-1 mb-1">
+                  <span className="text-[#c9af69] font-bold text-sm tracking-tight">VAT</span>
+                  <span className="text-white font-bold text-sm tracking-tight">watchHQ</span>
+                </div>
                 <h2 className="text-xl font-bold">Add new client</h2>
                 <p className="mt-1 text-sm text-slate-300">Enter the client details below.</p>
               </div>
@@ -738,12 +750,14 @@ export default function VatDashboard() {
         <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
-              <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-widest">Maddock & Co.</p>
-              <h1 className="mt-1 text-4xl font-bold">VAT Checker</h1>
+              <div className="flex items-center gap-1 mb-1">
+                <span className="text-[#c9af69] font-bold text-2xl tracking-tight">VAT</span>
+                <span className="text-white font-bold text-2xl tracking-tight">watchHQ</span>
+              </div>
               {selectedClientId ? (
-                <p className="mt-2 text-slate-300">Viewing: <span className="font-semibold text-white">{clientName}</span></p>
+                <p className="text-slate-300 text-sm">Viewing: <span className="font-semibold text-white">{clientName}</span></p>
               ) : (
-                <p className="mt-2 text-slate-300">{user.email} · Rolling period: {rollingPeriod}</p>
+                <p className="text-slate-300 text-sm">{user.email} · Rolling period: {rollingPeriod}</p>
               )}
             </div>
             <div className="flex gap-2 flex-wrap">
@@ -753,27 +767,23 @@ export default function VatDashboard() {
                 </button>
               )}
               {selectedClientId && (
-                <a
-                  href={`/api/reports/vat?clientId=${selectedClientId}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="rounded-xl bg-white/10 border border-white/20 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors"
-                >
-                  📄 Download Report
+                <a href={`/api/reports/vat?clientId=${selectedClientId}`} target="_blank" rel="noopener noreferrer"
+                  className="rounded-xl bg-white/10 border border-white/20 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
+                  📄 Report
                 </a>
               )}
+              <a href="/" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
+                🏠
+              </a>
+              <a href="/settings" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
+                ⚙️
+              </a>
+              <a href="/billing" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
+                💳
+              </a>
               <button onClick={signOut} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
                 Sign out
               </button>
-              <a href="/" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
-                🏠 Home
-              </a>
-              <a href="/settings" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
-                ⚙️ Settings
-              </a>
-              <a href="/billing" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
-                💳 Billing
-              </a>
             </div>
           </div>
         </div>
