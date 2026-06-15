@@ -765,6 +765,9 @@ export default function VatDashboard() {
               <button onClick={signOut} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
                 Sign out
               </button>
+              <a href="/" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
+                🏠 Home
+              </a>
               <a href="/settings" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors">
                 ⚙️ Settings
               </a>
