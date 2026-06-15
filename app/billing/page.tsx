@@ -261,7 +261,14 @@ export default function BillingPage() {
     <main className="min-h-screen bg-[#f2f7f8]" style={{ fontFamily: "'Open Sans', sans-serif" }}>
 
       {/* Animated header */}
-      <div className={`bg-[#343b46] transition-all duration-700 ${visible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-4"}`}>
+      <div
+        className="bg-[#343b46]"
+        style={{
+          transition: "opacity 700ms ease, transform 700ms ease",
+          opacity: visible ? 1 : 0,
+          transform: visible ? "translateY(0)" : "translateY(-16px)",
+        }}
+      >
         <div className="mx-auto max-w-6xl px-6 py-8">
           <div className="flex items-center justify-between">
             <div>
@@ -285,7 +292,7 @@ export default function BillingPage() {
         )}
 
         {/* Current status — animated */}
-        <div className={`mb-8 rounded-2xl bg-white p-6 shadow-sm transition-all duration-700 delay-100 ${visible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-4"}`}>
+        <div className="mb-8 rounded-2xl bg-white p-6 shadow-sm" style={{transition:"opacity 700ms ease 100ms, transform 700ms ease 100ms",opacity:visible?1:0,transform:visible?"translateY(0)":"translateY(16px)"}}>
           <h2 className="text-lg font-bold text-[#343b46] mb-4">Current Status</h2>
           <div className="grid gap-4 md:grid-cols-3">
             <div className="rounded-xl bg-[#f2f7f8] p-4">
