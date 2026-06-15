@@ -84,8 +84,10 @@ export default function LandingPage() {
       }}>
         <div style={{ maxWidth: 1200, margin: "0 auto", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <span style={{ color: "#c9af69", fontWeight: 800, fontSize: 20, letterSpacing: -0.5 }}>VAT</span>
-            <span style={{ color: "white", fontWeight: 800, fontSize: 20, letterSpacing: -0.5 }}>watchHQ</span>
+            <a href="/" style={{ display: "flex", alignItems: "center", gap: 4, textDecoration: "none" }}>
+              <span style={{ color: "#c9af69", fontWeight: 800, fontSize: 20, letterSpacing: -0.5 }}>VAT</span>
+              <span style={{ color: "white", fontWeight: 800, fontSize: 20, letterSpacing: -0.5 }}>watchHQ</span>
+            </a>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
             <a href="#features" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Features</a>
