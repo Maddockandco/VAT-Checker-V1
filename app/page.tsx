@@ -90,8 +90,8 @@ export default function LandingPage() {
             </a>
           </div>
           <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
-            <a href="#features" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Features</a>
-            <a href="#pricing" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Pricing</a>
+            <a href="#pricing" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Features</a>
+            <Link href="/pricing" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Pricing</Link>
             <Link href="/dashboard" style={{ color: "rgba(255,255,255,0.7)", fontSize: 14, textDecoration: "none" }}>Sign in</Link>
             <Link href="/signup" style={{
               backgroundColor: "#c9af69", color: "#343b46", fontSize: 14, fontWeight: 700,
@@ -349,7 +349,7 @@ export default function LandingPage() {
 
           <p style={{ textAlign: "center", color: "rgba(255,255,255,0.3)", fontSize: 13, marginTop: 32 }}>
             All plans include a 30-day free trial. No credit card required. Prices exclude VAT.
-            <Link href="/billing" style={{ color: "#c9af69", marginLeft: 8, textDecoration: "none" }}>See full pricing →</Link>
+            <Link href="/pricing" style={{ color: "#c9af69", marginLeft: 8, textDecoration: "none" }}>See full pricing →</Link>
           </p>
         </div>
       </section>
