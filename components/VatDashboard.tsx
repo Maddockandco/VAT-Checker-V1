@@ -98,6 +98,8 @@ export default function VatDashboard() {
   const [importingXero, setImportingXero] = useState(false);
   const [sendingAlert, setSendingAlert] = useState(false);
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
+  const [subscriptionStatus, setSubscriptionStatus] = useState<string>("trial");
+  const [currentPlan, setCurrentPlan] = useState<string | null>(null);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [archiveDeleteLoading, setArchiveDeleteLoading] = useState(false);
@@ -197,7 +199,7 @@ export default function VatDashboard() {
 
     const { data: firmData } = await supabase
       .from("firms")
-      .select("trial_ends_at")
+      .select("trial_ends_at,subscription_status,stripe_plan")
       .eq("id", firmId)
       .single();
 
@@ -207,6 +209,8 @@ export default function VatDashboard() {
       );
       setTrialDaysLeft(daysLeft > 0 ? daysLeft : 0);
     }
+    setSubscriptionStatus(firmData?.subscription_status || "trial");
+    setCurrentPlan(firmData?.stripe_plan || null);
 
     const { data: clients } = await supabase
       .from("clients")
@@ -432,11 +436,34 @@ export default function VatDashboard() {
     setOrgPickerSaving(false);
   }
 
+  function getClientLimit(): number {
+    if (subscriptionStatus === "active") {
+      if (currentPlan === "practice") return Infinity;
+      if (currentPlan === "growth") return 20;
+      if (currentPlan === "starter") return 10;
+      if (currentPlan === "solo") return 1;
+    }
+    // Trial — allow up to 3 clients for testing
+    return 3;
+  }
+
   async function createNewClient() {
     setNewClientError("");
     if (!supabase) { setNewClientError("Supabase not connected."); return; }
     if (!user) { setNewClientError("Please sign in first."); return; }
     if (!newClientName.trim()) { setNewClientError("Please enter a client name."); return; }
+
+    // Check client limit
+    const limit = getClientLimit();
+    if (savedClients.length >= limit) {
+      if (subscriptionStatus === "trial") {
+        setNewClientError(`Your free trial allows up to ${limit} clients. Please upgrade to add more.`);
+      } else {
+        setNewClientError(`You've reached your plan limit of ${limit} clients. Please upgrade your plan to add more.`);
+      }
+      return;
+    }
+
     setNewClientSaving(true);
     try {
       // Upsert user profile
@@ -561,6 +588,33 @@ export default function VatDashboard() {
             <p className="text-xl font-bold">VAT Checker</p>
           </div>
           <p className="text-slate-400 text-sm">Loading...</p>
+        </div>
+      </main>
+    );
+  }
+
+  // Trial expired lockout
+  if (user && subscriptionStatus === "trial" && trialDaysLeft !== null && trialDaysLeft <= 0) {
+    return (
+      <main className="min-h-screen bg-[#f2f7f8] flex items-center justify-center p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
+        <div className="w-full max-w-md">
+          <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white text-center">
+            <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-widest mb-2">VATwatchHQ</p>
+            <h1 className="text-3xl font-bold">Trial Expired</h1>
+          </div>
+          <div className="rounded-3xl bg-white p-8 shadow-sm text-center">
+            <div className="w-16 h-16 bg-yellow-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <span className="text-3xl">⏰</span>
+            </div>
+            <h2 className="text-xl font-bold text-[#343b46] mb-3">Your free trial has ended</h2>
+            <p className="text-slate-500 text-sm mb-6">Subscribe to continue monitoring your clients' VAT threshold positions and keep access to all your data.</p>
+            <a href="/billing" className="block w-full rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors text-center mb-3">
+              View plans & subscribe →
+            </a>
+            <button onClick={signOut} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-500 hover:bg-slate-50 transition-colors">
+              Sign out
+            </button>
+          </div>
         </div>
       </main>
     );
@@ -808,6 +862,9 @@ export default function VatDashboard() {
                     className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors">
                     + New client
                   </button>
+                  <span className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm text-slate-500">
+                    {savedClients.length}/{getClientLimit() === Infinity ? "∞" : getClientLimit()} clients
+                  </span>
                   <button onClick={loadSavedData}
                     className="rounded-xl bg-[#f2f7f8] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-slate-200 transition-colors">
                     {loadingSaved ? "Loading..." : "Refresh"}
