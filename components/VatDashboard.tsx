@@ -97,6 +97,7 @@ export default function VatDashboard() {
   const [message, setMessage] = useState("");
   const [saving, setSaving] = useState(false);
   const [importingXero, setImportingXero] = useState(false);
+  const [importingQuickbooks, setImportingQuickbooks] = useState(false);
   const [sendingAlert, setSendingAlert] = useState(false);
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>("trial");
@@ -309,6 +310,29 @@ export default function VatDashboard() {
       setMessage(`Xero import failed: ${error instanceof Error ? error.message : String(error)}`);
     }
     setImportingXero(false);
+  }
+
+  async function connectQuickbooks() {
+    if (!selectedClientId) { setMessage("Open a client before connecting QuickBooks."); return; }
+    window.location.href = `/api/quickbooks/connect?clientId=${selectedClientId}`;
+  }
+
+  async function importFromQuickbooks() {
+    if (!selectedClientId) { setMessage("Open a client before importing from QuickBooks."); return; }
+    setImportingQuickbooks(true);
+    setMessage("Importing from QuickBooks...");
+    try {
+      const response = await fetch(`/api/quickbooks/import?clientId=${selectedClientId}`);
+      const data = await response.json();
+      if (!data.ok) { setMessage(`QuickBooks import failed: ${data.error || "Unknown error"}`); setImportingQuickbooks(false); return; }
+      setMessage(`QuickBooks import complete. Rolling turnover: £${Number(data.rollingTurnover || 0).toLocaleString()}`);
+      await loadSavedData();
+      const currentClient = savedClients.find((c) => c.id === selectedClientId);
+      if (currentClient) await openClient(currentClient);
+    } catch (error) {
+      setMessage(`QuickBooks import failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    setImportingQuickbooks(false);
   }
 
   async function archiveClient() {
@@ -582,6 +606,7 @@ export default function VatDashboard() {
   const selectedClientReviews = reviewsForSelectedClient();
   const selectedClientAlerts = alertsForSelectedClient();
   const selectedXeroConnection = selectedClientId ? connectionForClient(selectedClientId, "xero") : undefined;
+  const selectedQuickbooksConnection = selectedClientId ? connectionForClient(selectedClientId, "quickbooks") : undefined;
   const rollingPeriod = months.length > 0 ? `${months[0].month} – ${months[months.length - 1].month}` : "";
 
   if (authLoading) {
@@ -1150,6 +1175,32 @@ export default function VatDashboard() {
                     <button onClick={sendAlertEmail} disabled={sendingAlert}
                       className="rounded-xl border border-[#343b46] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors disabled:opacity-50">
                       {sendingAlert ? "Sending..." : "Send Alert Email"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm">
+              <h2 className="text-lg font-bold text-[#343b46]">QuickBooks Connection</h2>
+              <p className="mt-1 text-sm text-slate-500">Connect QuickBooks Online and import income automatically.</p>
+              <div className="mt-4 rounded-xl border border-slate-100 bg-[#f2f7f8] p-4">
+                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                  <div>
+                    <p className="font-semibold text-[#343b46]">QuickBooks Online</p>
+                    <p className="text-sm text-slate-500 mt-1">
+                      {selectedQuickbooksConnection
+                        ? `✓ Connected on ${new Date(selectedQuickbooksConnection.connected_at).toLocaleDateString("en-GB")}`
+                        : "Not connected. Make sure account mappings are set up first."}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button onClick={connectQuickbooks} className="rounded-xl bg-[#2ca01c] px-4 py-2 text-sm font-semibold text-white hover:bg-[#258a17] transition-colors">
+                      {selectedQuickbooksConnection ? "Reconnect QuickBooks" : "Connect QuickBooks"}
+                    </button>
+                    <button onClick={importFromQuickbooks} disabled={!selectedQuickbooksConnection || importingQuickbooks}
+                      className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
+                      {importingQuickbooks ? "Importing..." : "Import from QuickBooks"}
                     </button>
                   </div>
                 </div>
