@@ -1060,6 +1060,24 @@ export default function VatDashboard() {
               </div>
             </div>
 
+            {/* VAT Registration CTA — shown when high risk or above */}
+            {(risk === "Registration Required" || risk === "Forward-Look Trigger" || risk === "High Risk") && (
+              <div className="mb-6 rounded-2xl bg-[#343b46] p-5 flex items-center justify-between flex-wrap gap-3">
+                <div>
+                  <p className="text-white font-semibold text-sm">
+                    {risk === "Registration Required" || risk === "Forward-Look Trigger"
+                      ? `⚠️ ${clientName} must register for VAT now`
+                      : `⚠️ ${clientName} is approaching the VAT threshold`}
+                  </p>
+                  <p className="text-slate-400 text-xs mt-1">Act before the 30-day registration deadline passes.</p>
+                </div>
+                <a href="https://www.tax.service.gov.uk/register-for-vat" target="_blank" rel="noopener noreferrer"
+                  className="rounded-xl bg-[#c9af69] px-4 py-2 text-xs font-bold text-[#343b46] hover:bg-[#b89d58] transition-colors whitespace-nowrap">
+                  Register client for VAT (HMRC) →
+                </a>
+              </div>
+            )}
+
             {selectedClientAlerts.length > 0 && (
               <div className="mb-6 rounded-2xl border border-orange-200 bg-orange-50 p-6 shadow-sm">
                 <div className="flex items-center justify-between mb-3">
