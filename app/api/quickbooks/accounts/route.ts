@@ -240,3 +240,71 @@ export async function GET(request: Request) {
     );
   }
 }
+
+// POST — accountant updates a classification for a QuickBooks account
+export async function POST(request: Request) {
+  try {
+    const body = await request.json();
+    const { clientId, accountCode, classification, notes } = body;
+
+    if (!clientId || !accountCode || !classification) {
+      return NextResponse.json(
+        { error: "Missing clientId, accountCode or classification" },
+        { status: 400 }
+      );
+    }
+
+    const validClassifications = [
+      "standard_rated",
+      "reduced_rated",
+      "zero_rated",
+      "exempt",
+      "out_of_scope",
+      "excluded",
+    ];
+
+    if (!validClassifications.includes(classification)) {
+      return NextResponse.json(
+        { error: "Invalid classification value" },
+        { status: 400 }
+      );
+    }
+
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const { error } = await supabase
+      .from("account_mappings")
+      .update({
+        vat_classification: classification,
+        reviewed: true,
+        reviewed_at: new Date().toISOString(),
+        notes: notes || null,
+        flag_reason: null,
+      })
+      .eq("client_id", clientId)
+      .eq("xero_account_code", accountCode);
+
+    if (error) {
+      return NextResponse.json(
+        { error: "Failed to update mapping", details: error.message },
+        { status: 500 }
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      message: `Account ${accountCode} classified as ${classification}`,
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: "Unexpected error updating account mapping",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
+}
