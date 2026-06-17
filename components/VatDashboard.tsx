@@ -261,8 +261,9 @@ export default function VatDashboard() {
       .eq("client_id", client.id);
     const loadedMonths = baseMonths.map((month) => {
       const xeroEntry = entries?.find((e) => e.month_label === month.month && e.source === "xero");
+      const quickbooksEntry = entries?.find((e) => e.month_label === month.month && e.source === "quickbooks");
       const manualEntry = entries?.find((e) => e.month_label === month.month && e.source === "manual");
-      const match = xeroEntry || manualEntry;
+      const match = xeroEntry || quickbooksEntry || manualEntry;
       return {
         month: month.month,
         standard: Number(match?.standard_rated || 0),
