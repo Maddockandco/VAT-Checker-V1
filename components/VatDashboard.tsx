@@ -1213,6 +1213,14 @@ export default function VatDashboard() {
                       </button>
                     </div>
                   </div>
+                  {importingXero && (
+                    <div className="mt-4">
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                        <div className="h-1.5 rounded-full bg-[#343b46]" style={{ width: "40%", animation: "importProgress 1.4s ease-in-out infinite" }} />
+                      </div>
+                      <p className="mt-2 text-xs text-slate-400">Pulling invoices, bank transactions and journals from Xero...</p>
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="rounded-xl border border-slate-100 bg-[#f2f7f8] p-4">
@@ -1241,9 +1249,25 @@ export default function VatDashboard() {
                       </button>
                     </div>
                   </div>
+                  {importingQuickbooks && (
+                    <div className="mt-4">
+                      <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-200">
+                        <div className="h-1.5 rounded-full bg-[#2ca01c]" style={{ width: "40%", animation: "importProgress 1.4s ease-in-out infinite" }} />
+                      </div>
+                      <p className="mt-2 text-xs text-slate-400">Pulling the Profit &amp; Loss report from QuickBooks...</p>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
+
+            <style>{`
+              @keyframes importProgress {
+                0% { margin-left: 0%; width: 30%; }
+                50% { margin-left: 60%; width: 40%; }
+                100% { margin-left: 0%; width: 30%; }
+              }
+            `}</style>
 
             <div className="mb-6">
               <AccountMappings clientId={selectedClientId} clientName={clientName} provider={accountingProvider} />
