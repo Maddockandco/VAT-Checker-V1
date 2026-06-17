@@ -953,6 +953,7 @@ export default function VatDashboard() {
                       const turnover = Number(review?.rolling_taxable_turnover || 0);
                       const percent = (turnover / VAT_THRESHOLD) * 100;
                       const xeroConn = connectionForClient(c.id, "xero");
+                      const quickbooksConn = connectionForClient(c.id, "quickbooks");
                       const rowRisk = review?.risk_status || "No review";
                       const rowRiskColour =
                         turnover >= VAT_THRESHOLD ? "text-red-600 font-bold"
@@ -981,7 +982,9 @@ export default function VatDashboard() {
                             <div className="flex gap-2">
                               {xeroConn
                                 ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Xero ✓</span>
-                                : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">No Xero</span>}
+                                : quickbooksConn
+                                ? <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">QuickBooks ✓</span>
+                                : <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-500">Not connected</span>}
                               {latestAlert
                                 ? <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs font-semibold text-orange-700">{latestAlert.alert_type}</span>
                                 : <span className="rounded-full bg-green-100 px-2 py-0.5 text-xs font-semibold text-green-700">Clear</span>}
@@ -1002,7 +1005,7 @@ export default function VatDashboard() {
                           <th className="pb-3 p-2">% Threshold</th>
                           <th className="pb-3 p-2">Risk</th>
                           <th className="pb-3 p-2">Alert</th>
-                          <th className="pb-3 p-2">Xero</th>
+                          <th className="pb-3 p-2">Software</th>
                           <th className="pb-3 p-2"></th>
                         </tr>
                       </thead>
@@ -1013,6 +1016,7 @@ export default function VatDashboard() {
                           const turnover = Number(review?.rolling_taxable_turnover || 0);
                           const percent = (turnover / VAT_THRESHOLD) * 100;
                           const xeroConn = connectionForClient(c.id, "xero");
+                          const quickbooksConn = connectionForClient(c.id, "quickbooks");
                           const rowRisk = review?.risk_status || "No review";
                           const rowRiskColour =
                             turnover >= VAT_THRESHOLD ? "text-red-600 font-bold"
@@ -1041,7 +1045,9 @@ export default function VatDashboard() {
                               </td>
                               <td className="p-2">
                                 {xeroConn
-                                  ? <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">Connected</span>
+                                  ? <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">Xero</span>
+                                  : quickbooksConn
+                                  ? <span className="rounded-full bg-green-100 px-2 py-1 text-xs font-semibold text-green-700">QuickBooks</span>
                                   : <span className="rounded-full bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-500">Not connected</span>}
                               </td>
                               <td className="p-2">
