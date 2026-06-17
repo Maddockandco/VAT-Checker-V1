@@ -98,6 +98,7 @@ export default function VatDashboard() {
   const [saving, setSaving] = useState(false);
   const [importingXero, setImportingXero] = useState(false);
   const [importingQuickbooks, setImportingQuickbooks] = useState(false);
+  const [accountingProvider, setAccountingProvider] = useState<"xero" | "quickbooks">("xero");
   const [sendingAlert, setSendingAlert] = useState(false);
   const [trialDaysLeft, setTrialDaysLeft] = useState<number | null>(null);
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>("trial");
@@ -273,6 +274,12 @@ export default function VatDashboard() {
     });
     setMonths(loadedMonths);
     setExpectedNext30Days(0);
+
+    // Default the software dropdown to whichever provider is already connected
+    const hasQuickbooks = connectionForClient(client.id, "quickbooks");
+    const hasXero = connectionForClient(client.id, "xero");
+    if (hasQuickbooks && !hasXero) setAccountingProvider("quickbooks");
+    else setAccountingProvider("xero");
   }
 
   function closeClient() {
@@ -1152,59 +1159,81 @@ export default function VatDashboard() {
             )}
 
             <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-[#343b46]">Xero Connection</h2>
-              <p className="mt-1 text-sm text-slate-500">Connect Xero and import income automatically.</p>
-              <div className="mt-4 rounded-xl border border-slate-100 bg-[#f2f7f8] p-4">
-                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="font-semibold text-[#343b46]">Xero</p>
-                    <p className="text-sm text-slate-500 mt-1">
-                      {selectedXeroConnection
-                        ? `✓ Connected on ${new Date(selectedXeroConnection.connected_at).toLocaleDateString("en-GB")}`
-                        : "Not connected. Make sure you are logged into the correct Xero organisation first."}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button onClick={connectXero} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors">
-                      {selectedXeroConnection ? "Reconnect Xero" : "Connect Xero"}
-                    </button>
-                    <button onClick={importFromXero} disabled={!selectedXeroConnection || importingXero}
-                      className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
-                      {importingXero ? "Importing..." : "Import from Xero"}
-                    </button>
-                    <button onClick={sendAlertEmail} disabled={sendingAlert}
-                      className="rounded-xl border border-[#343b46] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors disabled:opacity-50">
-                      {sendingAlert ? "Sending..." : "Send Alert Email"}
-                    </button>
-                  </div>
+              <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between mb-4">
+                <div>
+                  <h2 className="text-lg font-bold text-[#343b46]">Accounting Software</h2>
+                  <p className="mt-1 text-sm text-slate-500">Choose which software to connect and import income from.</p>
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Software</label>
+                  <select
+                    value={accountingProvider}
+                    onChange={(e) => setAccountingProvider(e.target.value as "xero" | "quickbooks")}
+                    className="rounded-xl border border-slate-200 px-4 py-2 text-sm font-semibold text-[#343b46] focus:border-[#c9af69] focus:outline-none"
+                  >
+                    <option value="xero">Xero</option>
+                    <option value="quickbooks">QuickBooks Online</option>
+                  </select>
                 </div>
               </div>
-            </div>
 
-            <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm">
-              <h2 className="text-lg font-bold text-[#343b46]">QuickBooks Connection</h2>
-              <p className="mt-1 text-sm text-slate-500">Connect QuickBooks Online and import income automatically.</p>
-              <div className="mt-4 rounded-xl border border-slate-100 bg-[#f2f7f8] p-4">
-                <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-                  <div>
-                    <p className="font-semibold text-[#343b46]">QuickBooks Online</p>
-                    <p className="text-sm text-slate-500 mt-1">
-                      {selectedQuickbooksConnection
-                        ? `✓ Connected on ${new Date(selectedQuickbooksConnection.connected_at).toLocaleDateString("en-GB")}`
-                        : "Not connected. Make sure account mappings are set up first."}
-                    </p>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    <button onClick={connectQuickbooks} className="rounded-xl bg-[#2ca01c] px-4 py-2 text-sm font-semibold text-white hover:bg-[#258a17] transition-colors">
-                      {selectedQuickbooksConnection ? "Reconnect QuickBooks" : "Connect QuickBooks"}
-                    </button>
-                    <button onClick={importFromQuickbooks} disabled={!selectedQuickbooksConnection || importingQuickbooks}
-                      className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
-                      {importingQuickbooks ? "Importing..." : "Import from QuickBooks"}
-                    </button>
+              {accountingProvider === "xero" ? (
+                <div className="rounded-xl border border-slate-100 bg-[#f2f7f8] p-4">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-semibold text-[#343b46]">Xero</p>
+                      <p className="text-sm text-slate-500 mt-1">
+                        {selectedXeroConnection
+                          ? `✓ Connected on ${new Date(selectedXeroConnection.connected_at).toLocaleDateString("en-GB")}`
+                          : "Not connected. Make sure you are logged into the correct Xero organisation first."}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={connectXero} className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors">
+                        {selectedXeroConnection ? "Reconnect Xero" : "Connect Xero"}
+                      </button>
+                      {selectedXeroConnection && (
+                        <button onClick={importFromXero} disabled={importingXero}
+                          className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
+                          {importingXero ? "Importing..." : "Import from Xero"}
+                        </button>
+                      )}
+                      <button onClick={sendAlertEmail} disabled={sendingAlert}
+                        className="rounded-xl border border-[#343b46] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors disabled:opacity-50">
+                        {sendingAlert ? "Sending..." : "Send Alert Email"}
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="rounded-xl border border-slate-100 bg-[#f2f7f8] p-4">
+                  <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="font-semibold text-[#343b46]">QuickBooks Online</p>
+                      <p className="text-sm text-slate-500 mt-1">
+                        {selectedQuickbooksConnection
+                          ? `✓ Connected on ${new Date(selectedQuickbooksConnection.connected_at).toLocaleDateString("en-GB")}`
+                          : "Not connected. Make sure account mappings are set up first."}
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button onClick={connectQuickbooks} className="rounded-xl bg-[#2ca01c] px-4 py-2 text-sm font-semibold text-white hover:bg-[#258a17] transition-colors">
+                        {selectedQuickbooksConnection ? "Reconnect QuickBooks" : "Connect QuickBooks"}
+                      </button>
+                      {selectedQuickbooksConnection && (
+                        <button onClick={importFromQuickbooks} disabled={importingQuickbooks}
+                          className="rounded-xl bg-[#c9af69] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#b89d58] transition-colors disabled:opacity-50">
+                          {importingQuickbooks ? "Importing..." : "Import from QuickBooks"}
+                        </button>
+                      )}
+                      <button onClick={sendAlertEmail} disabled={sendingAlert}
+                        className="rounded-xl border border-[#343b46] px-4 py-2 text-sm font-semibold text-[#343b46] hover:bg-[#f2f7f8] transition-colors disabled:opacity-50">
+                        {sendingAlert ? "Sending..." : "Send Alert Email"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="mb-6">
