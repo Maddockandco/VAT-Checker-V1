@@ -132,13 +132,13 @@ export async function GET(request: Request) {
     // Get account mappings for this client (same approach as Xero)
     const { data: mappings } = await supabase
       .from("account_mappings")
-      .select("account_code,vat_classification,confirmed_by_accountant")
+      .select("xero_account_code,vat_classification,reviewed")
       .eq("client_id", clientId);
 
     const accountMap = new Map<string, VatClassification>();
     for (const m of mappings || []) {
-      if (m.confirmed_by_accountant) {
-        accountMap.set(m.account_code, m.vat_classification as VatClassification);
+      if (m.reviewed) {
+        accountMap.set(m.xero_account_code, m.vat_classification as VatClassification);
       }
     }
 
