@@ -95,6 +95,17 @@ export default function VatDashboard() {
   const [expectedNext30Days, setExpectedNext30Days] = useState(0);
 
   const [message, setMessage] = useState("");
+  const [toast, setToast] = useState<{ type: "error" | "success" | "warning"; title: string; description: string } | null>(null);
+
+  function showToast(type: "error" | "success" | "warning", title: string, description: string) {
+    setToast({ type, title, description });
+  }
+
+  useEffect(() => {
+    if (!toast) return;
+    const timer = setTimeout(() => setToast(null), toast.type === "error" ? 8000 : 5000);
+    return () => clearTimeout(timer);
+  }, [toast]);
   const [saving, setSaving] = useState(false);
   const [importingXero, setImportingXero] = useState(false);
   const [importingQuickbooks, setImportingQuickbooks] = useState(false);
@@ -312,13 +323,21 @@ export default function VatDashboard() {
     try {
       const response = await fetch(`/api/xero/import?clientId=${selectedClientId}`);
       const data = await response.json();
-      if (!response.ok) { setMessage(`Xero import failed: ${data.error || "Unknown error"}`); setImportingXero(false); return; }
+      if (!response.ok) {
+        setMessage(`Xero import failed: ${data.error || "Unknown error"}`);
+        showToast("error", "Import failed", data.error || "Something went wrong while importing from Xero.");
+        setImportingXero(false);
+        return;
+      }
       setMessage(`Xero import complete. Rolling turnover: £${Number(data.rollingTurnover || 0).toLocaleString()}`);
+      showToast("success", "Import complete", `Rolling turnover updated to £${Number(data.rollingTurnover || 0).toLocaleString()}.`);
       await loadSavedData();
       const currentClient = savedClients.find((c) => c.id === selectedClientId);
       if (currentClient) await openClient(currentClient);
     } catch (error) {
-      setMessage(`Xero import failed: ${error instanceof Error ? error.message : String(error)}`);
+      const errorText = error instanceof Error ? error.message : String(error);
+      setMessage(`Xero import failed: ${errorText}`);
+      showToast("error", "Import failed", errorText);
     }
     setImportingXero(false);
   }
@@ -335,13 +354,25 @@ export default function VatDashboard() {
     try {
       const response = await fetch(`/api/quickbooks/import?clientId=${selectedClientId}`);
       const data = await response.json();
-      if (!data.ok) { setMessage(`QuickBooks import failed: ${data.error || "Unknown error"}`); setImportingQuickbooks(false); return; }
+      if (!data.ok) {
+        setMessage(`QuickBooks import failed: ${data.error || "Unknown error"}`);
+        if (data.currencyMismatch) {
+          showToast("error", "Currency mismatch", `This QuickBooks company uses ${data.detectedCurrency} as its home currency. VATwatchHQ only supports GBP companies for UK VAT threshold monitoring.`);
+        } else {
+          showToast("error", "Import failed", data.error || "Something went wrong while importing from QuickBooks.");
+        }
+        setImportingQuickbooks(false);
+        return;
+      }
       setMessage(`QuickBooks import complete. Rolling turnover: £${Number(data.rollingTurnover || 0).toLocaleString()}`);
+      showToast("success", "Import complete", `Rolling turnover updated to £${Number(data.rollingTurnover || 0).toLocaleString()}.`);
       await loadSavedData();
       const currentClient = savedClients.find((c) => c.id === selectedClientId);
       if (currentClient) await openClient(currentClient);
     } catch (error) {
-      setMessage(`QuickBooks import failed: ${error instanceof Error ? error.message : String(error)}`);
+      const errorText = error instanceof Error ? error.message : String(error);
+      setMessage(`QuickBooks import failed: ${errorText}`);
+      showToast("error", "Import failed", errorText);
     }
     setImportingQuickbooks(false);
   }
@@ -1477,6 +1508,65 @@ export default function VatDashboard() {
         {" · "}
         <span>Powered by Maddock & Co. VAT Checker</span>
       </div>
+
+      {/* Toast notification */}
+      {toast && (
+        <div
+          className="fixed top-6 right-6 z-50 max-w-sm"
+          style={{ animation: "toastSlideIn 350ms cubic-bezier(0.34, 1.56, 0.64, 1)" }}
+        >
+          <div
+            className={`rounded-2xl p-4 shadow-2xl border-2 backdrop-blur-sm flex gap-3 items-start ${
+              toast.type === "error"
+                ? "bg-red-50 border-red-300"
+                : toast.type === "warning"
+                ? "bg-amber-50 border-amber-300"
+                : "bg-green-50 border-green-300"
+            }`}
+          >
+            <div
+              className={`flex-shrink-0 w-10 h-10 rounded-full flex items-center justify-center text-xl ${
+                toast.type === "error"
+                  ? "bg-red-500"
+                  : toast.type === "warning"
+                  ? "bg-amber-500"
+                  : "bg-green-500"
+              }`}
+              style={{ animation: toast.type === "error" ? "toastShake 600ms ease 350ms" : "none" }}
+            >
+              <span className="text-white">
+                {toast.type === "error" ? "⚠️" : toast.type === "warning" ? "⚡" : "✓"}
+              </span>
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`font-bold text-sm ${toast.type === "error" ? "text-red-900" : toast.type === "warning" ? "text-amber-900" : "text-green-900"}`}>
+                {toast.title}
+              </p>
+              <p className={`text-xs mt-1 leading-relaxed ${toast.type === "error" ? "text-red-700" : toast.type === "warning" ? "text-amber-700" : "text-green-700"}`}>
+                {toast.description}
+              </p>
+            </div>
+            <button
+              onClick={() => setToast(null)}
+              className={`flex-shrink-0 text-lg leading-none ${toast.type === "error" ? "text-red-400 hover:text-red-600" : toast.type === "warning" ? "text-amber-400 hover:text-amber-600" : "text-green-400 hover:text-green-600"}`}
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes toastSlideIn {
+          0% { opacity: 0; transform: translateX(40px) scale(0.9); }
+          100% { opacity: 1; transform: translateX(0) scale(1); }
+        }
+        @keyframes toastShake {
+          0%, 100% { transform: rotate(0deg); }
+          25% { transform: rotate(-8deg); }
+          75% { transform: rotate(8deg); }
+        }
+      `}</style>
 
     </main>
   );
