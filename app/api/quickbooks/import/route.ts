@@ -274,7 +274,7 @@ export async function GET(request: Request) {
       .from("turnover_entries")
       .delete()
       .eq("client_id", clientId)
-      .eq("source", "xero"); // Reuse same source flag pattern; QB writes to 'xero' rolling slot is avoided below
+      .eq("source", "quickbooks");
 
     const turnoverEntries = Array.from(monthlyTotals.entries()).map(([label, totals]) => ({
       client_id: clientId as string,
