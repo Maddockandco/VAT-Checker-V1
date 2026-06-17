@@ -14,12 +14,13 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
   }
 
+  const targetClientId: string = clientId;
   const qbClientId = process.env.QUICKBOOKS_CLIENT_ID!;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
   const redirectUri = `${appUrl}/api/quickbooks/callback`;
 
   // Encode clientId in state so we know which client to attach the connection to
-  const state = Buffer.from(JSON.stringify({ clientId })).toString("base64");
+  const state = Buffer.from(JSON.stringify({ clientId: targetClientId })).toString("base64");
 
   const authUrl =
     `https://appcenter.intuit.com/connect/oauth2` +
