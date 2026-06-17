@@ -135,13 +135,13 @@ export default function VatDashboard() {
     supabase.auth.getUser().then(({ data }) => {
       if (data.user) {
         setUser(data.user);
-        loadSavedData().then((clients) => {
+        loadSavedData().then(({ clients, connections }) => {
           // After loading, check if a client is in the URL and auto-open it
           const params = new URLSearchParams(window.location.search);
           const clientParam = params.get("client");
           if (clientParam && clients) {
             const clientToOpen = clients.find((c: SavedClient) => c.id === clientParam);
-            if (clientToOpen) openClient(clientToOpen);
+            if (clientToOpen) openClient(clientToOpen, connections);
           }
         });
       } else {
@@ -243,10 +243,10 @@ export default function VatDashboard() {
     setAccountingConnections((connections || []) as AccountingConnection[]);
     setVatAlerts((alerts || []) as VatAlert[]);
     setLoadingSaved(false);
-    return (clients || []) as SavedClient[];
+    return { clients: (clients || []) as SavedClient[], connections: (connections || []) as AccountingConnection[] };
   }
 
-  async function openClient(client: SavedClient) {
+  async function openClient(client: SavedClient, connectionsOverride?: AccountingConnection[]) {
     if (!supabase) return;
     setSelectedClientId(client.id);
     setClientName(client.name);
@@ -275,9 +275,12 @@ export default function VatDashboard() {
     setMonths(loadedMonths);
     setExpectedNext30Days(0);
 
-    // Default the software dropdown to whichever provider is already connected
-    const hasQuickbooks = connectionForClient(client.id, "quickbooks");
-    const hasXero = connectionForClient(client.id, "xero");
+    // Default the software dropdown to whichever provider is already connected.
+    // Use the override list if provided (covers the case where this runs immediately
+    // after loadSavedData resolves, before the accountingConnections state has updated)
+    const connectionsList = connectionsOverride || accountingConnections;
+    const hasQuickbooks = connectionsList.some((c) => c.client_id === client.id && c.provider === "quickbooks");
+    const hasXero = connectionsList.some((c) => c.client_id === client.id && c.provider === "xero");
     if (hasQuickbooks && !hasXero) setAccountingProvider("quickbooks");
     else setAccountingProvider("xero");
   }
