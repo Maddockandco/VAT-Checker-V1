@@ -69,11 +69,14 @@ function classificationBadge(c: VatClassification) {
 export default function AccountMappings({
   clientId,
   clientName,
+  provider: externalProvider,
 }: {
   clientId: string;
   clientName: string;
+  provider?: "xero" | "quickbooks";
 }) {
-  const [provider, setProvider] = useState<"xero" | "quickbooks">("xero");
+  const [internalProvider, setInternalProvider] = useState<"xero" | "quickbooks">("xero");
+  const provider = externalProvider || internalProvider;
   const [accounts, setAccounts] = useState<AccountResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
@@ -82,6 +85,15 @@ export default function AccountMappings({
   const [localClassifications, setLocalClassifications] = useState<
     Record<string, VatClassification>
   >({});
+  const [lastLoadedProvider, setLastLoadedProvider] = useState<string | null>(null);
+
+  // Clear loaded accounts if the provider changes externally
+  useEffect(() => {
+    if (lastLoadedProvider && lastLoadedProvider !== provider) {
+      setAccounts([]);
+      setMessage("");
+    }
+  }, [provider]);
 
   async function loadAccounts() {
     setLoading(true);
@@ -94,6 +106,7 @@ export default function AccountMappings({
         return;
       }
       setAccounts(data.accounts || []);
+      setLastLoadedProvider(provider);
       // Pre-populate local state with current classifications
       const initial: Record<string, VatClassification> = {};
       for (const acc of data.accounts || []) {
@@ -198,20 +211,22 @@ export default function AccountMappings({
             </p>
           </div>
           <div className="flex flex-col gap-2 items-end">
-            <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
-              <button
-                onClick={() => { setProvider("xero"); setAccounts([]); setMessage(""); }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${provider === "xero" ? "bg-white shadow text-blue-950" : "text-slate-500"}`}
-              >
-                Xero
-              </button>
-              <button
-                onClick={() => { setProvider("quickbooks"); setAccounts([]); setMessage(""); }}
-                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${provider === "quickbooks" ? "bg-white shadow text-[#2ca01c]" : "text-slate-500"}`}
-              >
-                QuickBooks
-              </button>
-            </div>
+            {!externalProvider && (
+              <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+                <button
+                  onClick={() => { setInternalProvider("xero"); setAccounts([]); setMessage(""); }}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${provider === "xero" ? "bg-white shadow text-blue-950" : "text-slate-500"}`}
+                >
+                  Xero
+                </button>
+                <button
+                  onClick={() => { setInternalProvider("quickbooks"); setAccounts([]); setMessage(""); }}
+                  className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${provider === "quickbooks" ? "bg-white shadow text-[#2ca01c]" : "text-slate-500"}`}
+                >
+                  QuickBooks
+                </button>
+              </div>
+            )}
             <button
               onClick={loadAccounts}
               disabled={loading}
