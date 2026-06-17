@@ -198,7 +198,7 @@ export async function GET(request: Request) {
             const monthDate = new Date(monthCol.startDate);
 
             importedLines.push({
-              client_id: clientId,
+              client_id: clientId as string,
               source: "quickbooks",
               source_record_id: accountId,
               source_line_key: `qb_pnl_${accountId}_${monthCol.startDate}`,
@@ -270,7 +270,7 @@ export async function GET(request: Request) {
       .eq("source", "xero"); // Reuse same source flag pattern; QB writes to 'xero' rolling slot is avoided below
 
     const turnoverEntries = Array.from(monthlyTotals.entries()).map(([label, totals]) => ({
-      client_id: clientId,
+      client_id: clientId as string,
       month_label: label,
       standard_rated: Number(totals.standard.toFixed(2)),
       reduced_rated: Number(totals.reduced.toFixed(2)),
@@ -292,7 +292,7 @@ export async function GET(request: Request) {
       : "Low Risk";
 
     await supabase.from("vat_reviews").insert({
-      client_id: clientId,
+      client_id: clientId as string,
       rolling_taxable_turnover: Number(rollingTurnover.toFixed(2)),
       expected_next_30_days: 0,
       risk_status: riskStatus,
