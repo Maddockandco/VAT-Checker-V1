@@ -45,6 +45,24 @@ function getQuickBooksBaseUrl(): string {
     : "https://sandbox-quickbooks.api.intuit.com";
 }
 
+async function getHomeCurrency(
+  baseUrl: string,
+  realmId: string,
+  accessToken: string
+): Promise<string | null> {
+  const res = await fetch(
+    `${baseUrl}/v3/company/${realmId}/query?query=${encodeURIComponent("select * from Preferences")}&minorversion=65`,
+    {
+      cache: "no-store",
+      headers: { Authorization: `Bearer ${accessToken}`, Accept: "application/json" },
+    }
+  );
+  if (!res.ok) return null;
+  const json = await res.json();
+  const prefs = json?.QueryResponse?.Preferences?.[0];
+  return prefs?.CurrencyPrefs?.HomeCurrency?.value || null;
+}
+
 export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
@@ -79,6 +97,21 @@ export async function GET(request: Request) {
     let refreshToken = connection.refresh_token;
     const realmId = connection.provider_tenant_id;
     const baseUrl = getQuickBooksBaseUrl();
+
+    // GBP guard — VATwatchHQ only supports UK VAT threshold monitoring, which requires
+    // the connected company's home currency to be GBP. Block anything else clearly
+    // rather than risk an inaccurate VAT registration decision from currency mismatch.
+    const homeCurrency = await getHomeCurrency(baseUrl, realmId, accessToken);
+    if (homeCurrency && homeCurrency !== "GBP") {
+      return NextResponse.json(
+        {
+          error: `This QuickBooks company's home currency is ${homeCurrency}, not GBP. VATwatchHQ only supports GBP-based companies for UK VAT threshold monitoring. Please connect a QuickBooks company with GBP as its home currency.`,
+          currencyMismatch: true,
+          detectedCurrency: homeCurrency,
+        },
+        { status: 400 }
+      );
+    }
 
     async function qbGet(path: string): Promise<Response> {
       let res = await fetch(`${baseUrl}${path}`, {
