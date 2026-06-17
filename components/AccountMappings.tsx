@@ -73,6 +73,7 @@ export default function AccountMappings({
   clientId: string;
   clientName: string;
 }) {
+  const [provider, setProvider] = useState<"xero" | "quickbooks">("xero");
   const [accounts, setAccounts] = useState<AccountResult[]>([]);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState<string | null>(null);
@@ -86,10 +87,10 @@ export default function AccountMappings({
     setLoading(true);
     setMessage("");
     try {
-      const res = await fetch(`/api/xero/accounts?clientId=${clientId}`);
+      const res = await fetch(`/api/${provider}/accounts?clientId=${clientId}`);
       const data = await res.json();
       if (!res.ok) {
-        setMessage(data.error || "Failed to load accounts from Xero");
+        setMessage(data.error || `Failed to load accounts from ${provider === "xero" ? "Xero" : "QuickBooks"}`);
         return;
       }
       setAccounts(data.accounts || []);
@@ -108,7 +109,7 @@ export default function AccountMappings({
         setMessage("All accounts are classified and ready to import.");
       }
     } catch {
-      setMessage("Could not connect to Xero. Please check your connection.");
+      setMessage(`Could not connect to ${provider === "xero" ? "Xero" : "QuickBooks"}. Please check your connection.`);
     } finally {
       setLoading(false);
     }
@@ -123,7 +124,7 @@ export default function AccountMappings({
 
     setSaving(code);
     try {
-      const res = await fetch("/api/xero/accounts", {
+      const res = await fetch(`/api/${provider}/accounts`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ clientId, accountCode: code, classification }),
@@ -192,17 +193,33 @@ export default function AccountMappings({
           <div>
             <h2 className="text-xl font-bold">Account Mappings</h2>
             <p className="mt-1 text-sm text-slate-500">
-              Review and classify each Xero income account for {clientName}.
+              Review and classify each income account for {clientName}.
               VAT will only be calculated on accounts you have confirmed.
             </p>
           </div>
-          <button
-            onClick={loadAccounts}
-            disabled={loading}
-            className="rounded-xl bg-blue-950 px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50"
-          >
-            {loading ? "Loading from Xero..." : "Load accounts from Xero"}
-          </button>
+          <div className="flex flex-col gap-2 items-end">
+            <div className="flex gap-1 rounded-xl bg-slate-100 p-1">
+              <button
+                onClick={() => { setProvider("xero"); setAccounts([]); setMessage(""); }}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${provider === "xero" ? "bg-white shadow text-blue-950" : "text-slate-500"}`}
+              >
+                Xero
+              </button>
+              <button
+                onClick={() => { setProvider("quickbooks"); setAccounts([]); setMessage(""); }}
+                className={`rounded-lg px-3 py-1.5 text-xs font-semibold transition-colors ${provider === "quickbooks" ? "bg-white shadow text-[#2ca01c]" : "text-slate-500"}`}
+              >
+                QuickBooks
+              </button>
+            </div>
+            <button
+              onClick={loadAccounts}
+              disabled={loading}
+              className={`rounded-xl px-5 py-2.5 text-sm font-semibold text-white disabled:opacity-50 ${provider === "quickbooks" ? "bg-[#2ca01c]" : "bg-blue-950"}`}
+            >
+              {loading ? `Loading from ${provider === "xero" ? "Xero" : "QuickBooks"}...` : `Load accounts from ${provider === "xero" ? "Xero" : "QuickBooks"}`}
+            </button>
+          </div>
         </div>
 
         {message && (
@@ -438,7 +455,7 @@ function AccountRow({
           </div>
           <div className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
             {acc.type && <span>Type: {acc.type}</span>}
-            {acc.taxType && <span>· Xero tax code: {acc.taxType}</span>}
+            {acc.taxType && <span>· Tax code: {acc.taxType}</span>}
           </div>
           {acc.flagReason && (
             <div className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">
