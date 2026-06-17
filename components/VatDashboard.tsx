@@ -180,11 +180,11 @@ export default function VatDashboard() {
   }, []);
 
   async function loadSavedData() {
-    if (!supabase) return [];
+    if (!supabase) return { clients: [] as SavedClient[], connections: [] as AccountingConnection[] };
     setLoadingSaved(true);
 
     const { data: { user: currentUser } } = await supabase.auth.getUser();
-    if (!currentUser) { setLoadingSaved(false); return []; }
+    if (!currentUser) { setLoadingSaved(false); return { clients: [] as SavedClient[], connections: [] as AccountingConnection[] }; }
 
     const { data: firmAccess } = await supabase
       .from("firm_user_access")
@@ -196,7 +196,7 @@ export default function VatDashboard() {
     if (!firmAccess?.firm_id) {
       setSavedClients([]); setSavedReviews([]); setAccountingConnections([]); setVatAlerts([]);
       setLoadingSaved(false);
-      return [];
+      return { clients: [] as SavedClient[], connections: [] as AccountingConnection[] };
     }
 
     const firmId = firmAccess.firm_id;
