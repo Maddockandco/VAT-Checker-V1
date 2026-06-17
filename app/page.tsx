@@ -7,6 +7,11 @@
 
 import React, { useEffect, useState, useRef } from "react";
 import Link from "next/link";
+import { createClient } from "@supabase/supabase-js";
+
+const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || "";
+const supabase = supabaseUrl && supabaseAnonKey ? createClient(supabaseUrl, supabaseAnonKey) : null;
 
 export default function LandingPage() {
   const [scrolled, setScrolled] = useState(false);
@@ -18,6 +23,17 @@ export default function LandingPage() {
   const [pricingVisible, setPricingVisible] = useState(false);
 
   useEffect(() => {
+    // If already signed in, skip the marketing page entirely and go straight
+    // to the dashboard — this matters most for people clicking through from
+    // their Xero "Connected Apps" list, who shouldn't have to find sign-in again
+    if (supabase) {
+      supabase.auth.getSession().then(({ data }) => {
+        if (data.session?.user) {
+          window.location.href = "/dashboard";
+        }
+      });
+    }
+
     // Hero entrance
     setTimeout(() => setHeroVisible(true), 100);
 
