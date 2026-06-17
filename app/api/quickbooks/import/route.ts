@@ -228,6 +228,13 @@ export async function GET(request: Request) {
       return NextResponse.json({
         ok: false,
         error: "No income data found in QuickBooks for the last 12 months. Check account mappings are confirmed.",
+        debug: {
+          dateRangeRequested: { from: isoDate(fromDate), to: isoDate(toDate) },
+          accountMapKeys: Array.from(accountMap.keys()),
+          monthColumnsFound: monthColumns.length,
+          rawRowCount: (reportRes?.Rows?.Row || []).length,
+          rawReportSample: JSON.stringify(reportRes).slice(0, 3000),
+        },
       });
     }
 
