@@ -18,8 +18,12 @@ export async function GET(request: Request) {
     return NextResponse.redirect(`${appUrl}/dashboard?quickbooks=error`);
   }
 
+  const authCode: string = code;
+  const tenantId: string = realmId;
+  const oauthState: string = state;
+
   try {
-    const { clientId } = JSON.parse(Buffer.from(state, "base64").toString());
+    const { clientId } = JSON.parse(Buffer.from(oauthState, "base64").toString());
 
     const qbClientId = process.env.QUICKBOOKS_CLIENT_ID!;
     const qbClientSecret = process.env.QUICKBOOKS_CLIENT_SECRET!;
@@ -34,7 +38,7 @@ export async function GET(request: Request) {
       },
       body: new URLSearchParams({
         grant_type: "authorization_code",
-        code,
+        code: authCode,
         redirect_uri: redirectUri,
       }),
     });
@@ -63,7 +67,7 @@ export async function GET(request: Request) {
     await supabase.from("accounting_connections").insert({
       client_id: clientId,
       provider: "quickbooks",
-      provider_tenant_id: realmId,
+      provider_tenant_id: tenantId,
       access_token: tokenData.access_token,
       refresh_token: tokenData.refresh_token,
       token_expires_at: expiresAt,
