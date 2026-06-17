@@ -1,0 +1,242 @@
+// app/api/quickbooks/accounts/route.ts
+// Pulls income accounts from QuickBooks, classifies them using HMRC rules,
+// saves to account_mappings table for accountant review
+// Mirrors the Xero accounts route but uses QuickBooks Account entity API
+
+import { createClient } from "@supabase/supabase-js";
+import { NextResponse } from "next/server";
+import { classifyAccount } from "@/lib/hmrc-vat-rules";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type QuickBooksAccount = {
+  Id?: string;
+  Name?: string;
+  AccountType?: string;
+  AccountSubType?: string;
+  Active?: boolean;
+  Classification?: string;
+};
+
+async function refreshQuickBooksToken(refreshToken: string) {
+  const qbClientId = process.env.QUICKBOOKS_CLIENT_ID!;
+  const qbClientSecret = process.env.QUICKBOOKS_CLIENT_SECRET!;
+
+  const response = await fetch("https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer", {
+    method: "POST",
+    headers: {
+      Authorization: `Basic ${Buffer.from(`${qbClientId}:${qbClientSecret}`).toString("base64")}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams({
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+  if (!response.ok) throw new Error(await response.text());
+  return response.json();
+}
+
+function getQuickBooksBaseUrl(): string {
+  const env = process.env.QUICKBOOKS_ENV || "sandbox";
+  return env === "production"
+    ? "https://quickbooks.api.intuit.com"
+    : "https://sandbox-quickbooks.api.intuit.com";
+}
+
+export async function GET(request: Request) {
+  try {
+    const url = new URL(request.url);
+    const clientId = url.searchParams.get("clientId");
+
+    if (!clientId) {
+      return NextResponse.json({ error: "Missing clientId" }, { status: 400 });
+    }
+
+    const supabase = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.SUPABASE_SERVICE_ROLE_KEY!
+    );
+
+    const { data: connection, error: connError } = await supabase
+      .from("accounting_connections")
+      .select("*")
+      .eq("client_id", clientId)
+      .eq("provider", "quickbooks")
+      .order("connected_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (connError || !connection) {
+      return NextResponse.json(
+        { error: "No QuickBooks connection found for this client" },
+        { status: 404 }
+      );
+    }
+
+    let accessToken = connection.access_token;
+    let refreshToken = connection.refresh_token;
+    const realmId = connection.provider_tenant_id;
+    const baseUrl = getQuickBooksBaseUrl();
+
+    async function qbGet(path: string): Promise<Response> {
+      let res = await fetch(`${baseUrl}${path}`, {
+        cache: "no-store",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          Accept: "application/json",
+        },
+      });
+
+      if (res.status === 401) {
+        const refreshed = await refreshQuickBooksToken(refreshToken);
+        accessToken = refreshed.access_token;
+        refreshToken = refreshed.refresh_token;
+
+        await supabase
+          .from("accounting_connections")
+          .update({
+            access_token: refreshed.access_token,
+            refresh_token: refreshed.refresh_token,
+            token_expires_at: new Date(Date.now() + refreshed.expires_in * 1000).toISOString(),
+          })
+          .eq("id", connection.id);
+
+        res = await fetch(`${baseUrl}${path}`, {
+          cache: "no-store",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+            Accept: "application/json",
+          },
+        });
+      }
+
+      return res;
+    }
+
+    // Query all Income and Other Income accounts
+    const query = encodeURIComponent(
+      "select * from Account where AccountType in ('Income','Other Income') and Active = true"
+    );
+    const accountsRes = await qbGet(`/v3/company/${realmId}/query?query=${query}&minorversion=65`);
+
+    if (!accountsRes.ok) {
+      return NextResponse.json(
+        {
+          error: "Failed to fetch accounts from QuickBooks",
+          status: accountsRes.status,
+          details: await accountsRes.text(),
+        },
+        { status: 400 }
+      );
+    }
+
+    const accountsJson = await accountsRes.json();
+    const incomeAccounts: QuickBooksAccount[] = accountsJson?.QueryResponse?.Account || [];
+
+    // Get existing mappings for this client so we don't overwrite reviewed ones
+    const { data: existingMappings } = await supabase
+      .from("account_mappings")
+      .select("*")
+      .eq("client_id", clientId);
+
+    const existingByCode = new Map(
+      (existingMappings || []).map((m) => [m.xero_account_code, m])
+    );
+
+    const mappingsToUpsert = [];
+    const results = [];
+
+    for (const account of incomeAccounts) {
+      const code = String(account.Id || "").trim();
+      const name = String(account.Name || "Unknown").trim();
+      if (!code) continue;
+
+      const existing = existingByCode.get(code);
+
+      if (existing?.reviewed) {
+        results.push({
+          code,
+          name,
+          type: account.AccountType,
+          taxType: account.AccountSubType || "NONE",
+          classification: existing.vat_classification,
+          reviewed: true,
+          flagReason: existing.flag_reason,
+          hmrcGuidance: null,
+          confidence: "confirmed_by_accountant",
+        });
+        continue;
+      }
+
+      // QuickBooks doesn't have Xero-style tax type codes on the account itself —
+      // classification relies mainly on account name/type, similar to an
+      // unregistered business in Xero (NONE tax type)
+      const classification = classifyAccount({
+        xeroAccountName: name,
+        xeroAccountType: account.AccountType === "Income" ? "REVENUE" : "OTHERINCOME",
+        xeroTaxType: "NONE",
+      });
+
+      mappingsToUpsert.push({
+        client_id: clientId,
+        xero_account_code: code,
+        xero_account_name: name,
+        xero_account_type: account.AccountType || null,
+        xero_tax_type: "NONE",
+        vat_classification: classification.classification,
+        flag_reason: classification.flagReason,
+        reviewed: false,
+      });
+
+      results.push({
+        code,
+        name,
+        type: account.AccountType,
+        taxType: "NONE",
+        classification: classification.classification,
+        confidence: classification.confidence,
+        flagSeverity: classification.flagSeverity,
+        flagReason: classification.flagReason,
+        hmrcGuidance: classification.hmrcGuidance,
+        reviewed: false,
+      });
+    }
+
+    if (mappingsToUpsert.length > 0) {
+      await supabase
+        .from("account_mappings")
+        .upsert(mappingsToUpsert, {
+          onConflict: "client_id,xero_account_code",
+          ignoreDuplicates: false,
+        });
+    }
+
+    const needsReview = results.filter((r) => r.classification === "needs_review");
+    const confirmed = results.filter((r) => r.reviewed);
+    const autoClassified = results.filter((r) => !r.reviewed && r.classification !== "needs_review");
+
+    return NextResponse.json({
+      ok: true,
+      clientId,
+      totalIncomeAccounts: results.length,
+      needsReviewCount: needsReview.length,
+      autoClassifiedCount: autoClassified.length,
+      confirmedByAccountantCount: confirmed.length,
+      accounts: results,
+      message:
+        needsReview.length > 0
+          ? `${needsReview.length} account(s) need your review before VAT can be calculated`
+          : "All accounts classified — ready to import",
+    });
+  } catch (error) {
+    return NextResponse.json(
+      {
+        error: "Unexpected error fetching QuickBooks accounts",
+        details: error instanceof Error ? error.message : String(error),
+      },
+      { status: 500 }
+    );
+  }
+}
