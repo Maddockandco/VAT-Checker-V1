@@ -24,23 +24,26 @@ export async function GET(request: Request) {
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com";
 
-  // Get all clients that have a valid Xero connection
+  // Get all clients that have a valid Xero or QuickBooks connection
   const { data: connections } = await supabase
     .from("accounting_connections")
     .select("client_id, provider")
-    .eq("provider", "xero")
+    .in("provider", ["xero", "quickbooks"])
     .neq("provider_tenant_id", "PENDING_SELECTION");
 
   if (!connections || connections.length === 0) {
-    return NextResponse.json({ ok: true, message: "No Xero connections found", processed: 0 });
+    return NextResponse.json({ ok: true, message: "No accounting connections found", processed: 0 });
   }
 
-  // Deduplicate client IDs (a client might have multiple connections)
-  const clientIds = [...new Set(connections.map((c) => c.client_id))];
+  // Deduplicate by client+provider (a client could have both Xero and QuickBooks in theory)
+  const clientProviderPairs = Array.from(
+    new Map(connections.map((c) => [`${c.client_id}:${c.provider}`, c])).values()
+  );
 
   const results: Array<{
     clientId: string;
     clientName: string;
+    provider: string;
     status: string;
     turnover?: number;
     riskStatus?: string;
@@ -48,10 +51,10 @@ export async function GET(request: Request) {
     error?: string;
   }> = [];
 
-  for (const clientId of clientIds) {
+  for (const { client_id: clientId, provider } of clientProviderPairs) {
     try {
-      // Step 1 — Import from Xero
-      const importRes = await fetch(`${baseUrl}/api/xero/import?clientId=${clientId}`, {
+      // Step 1 — Import from the connected accounting software
+      const importRes = await fetch(`${baseUrl}/api/${provider}/import?clientId=${clientId}`, {
         headers: { "x-cron-request": "true" },
       });
 
@@ -61,6 +64,7 @@ export async function GET(request: Request) {
         results.push({
           clientId,
           clientName: importData.clientName || clientId,
+          provider,
           status: "import_failed",
           error: importData.error,
         });
@@ -85,6 +89,7 @@ export async function GET(request: Request) {
       results.push({
         clientId,
         clientName: importData.clientName,
+        provider,
         status: "success",
         turnover: importData.rollingTurnover,
         riskStatus: importData.riskStatus,
@@ -95,6 +100,7 @@ export async function GET(request: Request) {
       results.push({
         clientId,
         clientName: clientId,
+        provider,
         status: "error",
         error: error instanceof Error ? error.message : String(error),
       });
@@ -108,7 +114,7 @@ export async function GET(request: Request) {
   return NextResponse.json({
     ok: true,
     message: `Monthly import complete`,
-    totalClients: clientIds.length,
+    totalClients: clientProviderPairs.length,
     successCount,
     alertCount,
     errorCount,
