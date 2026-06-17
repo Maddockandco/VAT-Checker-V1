@@ -1246,7 +1246,7 @@ export default function VatDashboard() {
             </div>
 
             <div className="mb-6">
-              <AccountMappings clientId={selectedClientId} clientName={clientName} />
+              <AccountMappings clientId={selectedClientId} clientName={clientName} provider={accountingProvider} />
             </div>
 
             <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm">
