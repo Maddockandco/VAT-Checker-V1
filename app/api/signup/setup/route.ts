@@ -12,7 +12,7 @@ export async function POST(request: Request) {
   try {
     const { userId, firmName, fullName, email } = await request.json();
 
-    if (!userId || !firmName || !email) {
+    if (!userId || !email) {
       return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
     }
 
@@ -41,6 +41,38 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, firmId: existingAccess.firm_id });
     }
 
+    // Check for a pending invite matching this email — if found, this person
+    // is joining an existing firm as an account manager rather than starting
+    // their own firm and trial.
+    const { data: invite } = await supabase
+      .from("firm_invites")
+      .select("*")
+      .eq("email", email.toLowerCase().trim())
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (invite) {
+      await supabase.from("firm_user_access").insert({
+        firm_id: invite.firm_id,
+        user_id: userId,
+        role: invite.role,
+        display_name: invite.display_name || fullName,
+      });
+
+      await supabase
+        .from("firm_invites")
+        .update({ status: "accepted", accepted_at: new Date().toISOString() })
+        .eq("id", invite.id);
+
+      return NextResponse.json({ ok: true, firmId: invite.firm_id, joinedExistingFirm: true });
+    }
+
+    if (!firmName) {
+      return NextResponse.json({ error: "Missing firm name" }, { status: 400 });
+    }
+
     // Create the firm
     const trialEndsAt = new Date();
     trialEndsAt.setDate(trialEndsAt.getDate() + 30);
@@ -59,11 +91,12 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: `Failed to create firm: ${firmError?.message}` }, { status: 500 });
     }
 
-    // Link user to firm
+    // Link user to firm as the owner
     await supabase.from("firm_user_access").insert({
       firm_id: firm.id,
       user_id: userId,
-      role: "firm_admin",
+      role: "owner",
+      display_name: fullName,
     });
 
     // Send welcome email via Resend
