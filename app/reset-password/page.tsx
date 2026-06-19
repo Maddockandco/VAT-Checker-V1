@@ -32,14 +32,20 @@ export default function ResetPasswordPage() {
 
   async function handleRequest() {
     if (!email.trim()) { setError("Please enter your email address."); return; }
-    if (!supabase) { setError("Connection error."); return; }
+    if (!supabase) { setError("Connection error. Please refresh and try again."); return; }
     setLoading(true); setError("");
-    const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
-    if (err) { setError(err.message); } else {
-      setMessage("Check your email for a password reset link.");
-      setMode("done");
+    try {
+      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+        redirectTo: `${window.location.origin}/reset-password`,
+      });
+      if (err) {
+        setError(typeof err.message === "string" && err.message ? err.message : "Could not send reset link. Please check the email address and try again.");
+      } else {
+        setMessage("Check your email for a password reset link.");
+        setMode("done");
+      }
+    } catch (unexpectedError) {
+      setError(unexpectedError instanceof Error ? unexpectedError.message : "Something went wrong. Please try again.");
     }
     setLoading(false);
   }
@@ -47,12 +53,18 @@ export default function ResetPasswordPage() {
   async function handleReset() {
     if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
     if (password !== confirmPassword) { setError("Passwords do not match."); return; }
-    if (!supabase) { setError("Connection error."); return; }
+    if (!supabase) { setError("Connection error. Please refresh and try again."); return; }
     setLoading(true); setError("");
-    const { error: err } = await supabase.auth.updateUser({ password });
-    if (err) { setError(err.message); } else {
-      setMessage("Password updated successfully!");
-      setMode("done");
+    try {
+      const { error: err } = await supabase.auth.updateUser({ password });
+      if (err) {
+        setError(typeof err.message === "string" && err.message ? err.message : "Could not update your password. Please try again.");
+      } else {
+        setMessage("Password updated successfully!");
+        setMode("done");
+      }
+    } catch (unexpectedError) {
+      setError(unexpectedError instanceof Error ? unexpectedError.message : "Something went wrong. Please try again.");
     }
     setLoading(false);
   }
@@ -61,8 +73,10 @@ export default function ResetPasswordPage() {
     <main className="min-h-screen bg-[#f2f7f8] flex items-center justify-center p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
       <div className="w-full max-w-md">
         <div className="mb-6 rounded-3xl bg-[#343b46] p-8 text-white">
-          <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-widest mb-2">Maddock & Co.</p>
-          <h1 className="text-3xl font-bold">VAT Checker</h1>
+          <div className="flex items-center gap-1 mb-2">
+            <span className="text-[#c9af69] font-bold text-lg">VAT</span>
+            <span className="text-white font-bold text-lg">watchHQ</span>
+          </div>
           <p className="mt-2 text-slate-300 text-sm">
             {mode === "request" ? "Reset your password" : mode === "reset" ? "Choose a new password" : "All done!"}
           </p>
