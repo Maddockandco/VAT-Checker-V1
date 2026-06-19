@@ -532,6 +532,27 @@ export async function GET(request: Request) {
       });
     }
 
+    // Automatically send an alert email right away if the risk warrants it —
+    // covers both the monthly cron AND a manual/first-connection import, so
+    // accountants and clients aren't left waiting until the 1st of the month
+    // to discover they're already close to the threshold.
+    let autoAlertSent = false;
+    const emailAlertStatuses = ["Watch", "Warning", "High Risk", "Registration Required"];
+    if (emailAlertStatuses.includes(riskStatus)) {
+      try {
+        const alertRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com"}/api/alerts/send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId }),
+        });
+        const alertData = await alertRes.json();
+        autoAlertSent = alertData.ok && alertData.emailsSent?.length > 0;
+      } catch {
+        // Don't let a failed email block the import response
+        autoAlertSent = false;
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       message: "Xero import complete",
@@ -547,6 +568,7 @@ export async function GET(request: Request) {
       thresholdPercent: Number(thresholdPercent.toFixed(2)),
       riskStatus,
       alertType,
+      autoAlertSent,
       warnings,
       monthlyBreakdown: turnoverRows,
     });
