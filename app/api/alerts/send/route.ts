@@ -8,7 +8,7 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const FROM_EMAIL = process.env.RESEND_FROM_EMAIL || "alerts@maddockandco.com";
+const FROM_EMAIL = "alerts@maddockandco.com";
 const FIRM_NAME = "Maddock & Co. UK Ltd";
 const FIRM_WEBSITE = "https://www.maddockandco.com";
 
@@ -184,7 +184,7 @@ export async function POST(request: Request) {
     // Get client details including email
     const { data: client } = await supabase
       .from("clients")
-      .select("id,name,email,contact_name,firm_id")
+      .select("id,name,email,contact_name,firm_id,account_manager_id")
       .eq("id", clientId)
       .single();
 
@@ -219,23 +219,30 @@ export async function POST(request: Request) {
       : thresholdPercent >= 80 ? "WARNING"
       : "WATCH";
 
-    // Get accountant email via firm
+    // Get accountant email — prefer the client's assigned account manager,
+    // fall back to the firm owner if no one is specifically assigned
     let accountantEmail: string | null = null;
     let accountantName = FIRM_NAME;
 
     if (client.firm_id) {
-      const { data: firmAccess } = await supabase
-        .from("firm_user_access")
-        .select("user_id")
-        .eq("firm_id", client.firm_id)
-        .limit(1)
-        .single();
+      let targetUserId: string | null = client.account_manager_id || null;
 
-      if (firmAccess) {
+      if (!targetUserId) {
+        const { data: ownerAccess } = await supabase
+          .from("firm_user_access")
+          .select("user_id")
+          .eq("firm_id", client.firm_id)
+          .eq("role", "owner")
+          .limit(1)
+          .single();
+        targetUserId = ownerAccess?.user_id || null;
+      }
+
+      if (targetUserId) {
         const { data: accountantProfile } = await supabase
           .from("user_profiles")
           .select("email,full_name")
-          .eq("id", firmAccess.user_id)
+          .eq("id", targetUserId)
           .single();
 
         if (accountantProfile) {
@@ -250,6 +257,14 @@ export async function POST(request: Request) {
     const endMonth = new Date(today.getFullYear(), today.getMonth() - 1, 1);
     const startMonth = new Date(endMonth.getFullYear(), endMonth.getMonth() - 11, 1);
     const importPeriod = `${startMonth.toLocaleString("en-GB", { month: "short", year: "numeric" })} – ${endMonth.toLocaleString("en-GB", { month: "short", year: "numeric" })}`;
+
+    // Firm-level alert email override — used as reply-to so client replies
+    // land somewhere the firm actually monitors, not necessarily the sign-up address
+    let firmReplyTo: string | null = null;
+    if (client.firm_id) {
+      const { data: firmRow } = await supabase.from("firms").select("alerts_email").eq("id", client.firm_id).single();
+      firmReplyTo = firmRow?.alerts_email || null;
+    }
 
     const emailsSent: string[] = [];
     const emailsFailed: string[] = [];
@@ -275,6 +290,7 @@ export async function POST(request: Request) {
         },
         body: JSON.stringify({
           from: `${FIRM_NAME} <${FROM_EMAIL}>`,
+          ...(firmReplyTo ? { reply_to: firmReplyTo } : {}),
           to: [accountantEmail],
           subject: `${getRiskEmoji(review.risk_status)} VAT Alert — ${client.name} is at ${thresholdPercent.toFixed(1)}% of threshold`,
           html,
@@ -310,6 +326,7 @@ export async function POST(request: Request) {
         },
         body: JSON.stringify({
           from: `${FIRM_NAME} <${FROM_EMAIL}>`,
+          ...(firmReplyTo ? { reply_to: firmReplyTo } : {}),
           to: [client.email],
           subject: `${getRiskEmoji(review.risk_status)} VAT Threshold Alert — Action May Be Required`,
           html,
