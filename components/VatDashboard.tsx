@@ -38,6 +38,7 @@ type SavedClient = {
   firm_id: string | null;
   email: string | null;
   contact_name: string | null;
+  account_manager_id: string | null;
   created_at: string;
 };
 
@@ -121,6 +122,13 @@ export default function VatDashboard() {
   const [subscriptionStatus, setSubscriptionStatus] = useState<string>("trial");
   const [currentPlan, setCurrentPlan] = useState<string | null>(null);
   const [firmId, setFirmId] = useState<string | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<string>("owner");
+  const [showTeamPanel, setShowTeamPanel] = useState(false);
+  const [teamMembers, setTeamMembers] = useState<Array<{ user_id: string; role: string; display_name: string | null; email?: string }>>([]);
+  const [pendingInvites, setPendingInvites] = useState<Array<{ id: string; email: string; display_name: string | null; status: string; created_at: string }>>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteName, setInviteName] = useState("");
+  const [invitingMember, setInvitingMember] = useState(false);
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [archiveDeleteLoading, setArchiveDeleteLoading] = useState(false);
@@ -205,7 +213,7 @@ export default function VatDashboard() {
 
     const { data: firmAccess } = await supabase
       .from("firm_user_access")
-      .select("firm_id")
+      .select("firm_id,role,display_name")
       .eq("user_id", currentUser.id)
       .limit(1)
       .single();
@@ -217,7 +225,9 @@ export default function VatDashboard() {
     }
 
     const firmId = firmAccess.firm_id;
+    const userRole = firmAccess.role || "owner";
     setFirmId(firmId);
+    setCurrentUserRole(userRole);
 
     const { data: firmData } = await supabase
       .from("firms")
@@ -234,12 +244,20 @@ export default function VatDashboard() {
     setSubscriptionStatus(firmData?.subscription_status || "trial");
     setCurrentPlan(firmData?.stripe_plan || null);
 
-    const { data: clients } = await supabase
+    let clientsQuery = supabase
       .from("clients")
-      .select("id,name,sector,firm_id,email,contact_name,created_at")
+      .select("id,name,sector,firm_id,email,contact_name,account_manager_id,created_at")
       .eq("firm_id", firmId)
       .eq("archived", false)
       .order("created_at", { ascending: false });
+
+    // Account managers only see clients explicitly assigned to them.
+    // Owners see every client in the firm.
+    if (userRole === "account_manager") {
+      clientsQuery = clientsQuery.eq("account_manager_id", currentUser.id);
+    }
+
+    const { data: clients } = await clientsQuery;
 
     const clientIds = (clients || []).map((c) => c.id);
 
@@ -581,7 +599,7 @@ export default function VatDashboard() {
           .select()
           .single();
         if (firmError || !firm) throw new Error(`Firm error: ${firmError?.message}`);
-        await supabase.from("firm_user_access").insert({ firm_id: firm.id, user_id: user.id, role: "firm_admin" });
+        await supabase.from("firm_user_access").insert({ firm_id: firm.id, user_id: user.id, role: "owner" });
         firmId = firm.id;
       }
 
@@ -608,6 +626,86 @@ export default function VatDashboard() {
       setNewClientError(err instanceof Error ? err.message : "Something went wrong.");
     }
     setNewClientSaving(false);
+  }
+
+  async function loadTeamData() {
+    if (!firmId) return;
+    try {
+      const res = await fetch(`/api/team/invite?firmId=${firmId}`);
+      const data = await res.json();
+      if (data.ok) {
+        setTeamMembers(data.members || []);
+        setPendingInvites(data.invites || []);
+      }
+    } catch {
+      // Silent fail — team panel just shows empty
+    }
+  }
+
+  async function inviteTeamMember() {
+    if (!firmId || !user) return;
+    if (!inviteEmail.trim()) { showToast("error", "Email required", "Please enter an email address to invite."); return; }
+
+    setInvitingMember(true);
+    try {
+      const res = await fetch("/api/team/invite", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          firmId,
+          invitedByUserId: user.id,
+          email: inviteEmail.trim(),
+          displayName: inviteName.trim() || null,
+          role: "account_manager",
+        }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        showToast("error", "Could not send invite", data.error || "Unknown error");
+      } else {
+        showToast("success", "Invite sent", `${inviteEmail.trim()} has been invited to join your firm as an account manager.`);
+        setInviteEmail("");
+        setInviteName("");
+        await loadTeamData();
+      }
+    } catch (err) {
+      showToast("error", "Could not send invite", err instanceof Error ? err.message : "Unknown error");
+    }
+    setInvitingMember(false);
+  }
+
+  async function revokeInvite(inviteId: string) {
+    try {
+      await fetch("/api/team/invite", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ inviteId }),
+      });
+      showToast("success", "Invite revoked", "The invitation has been cancelled.");
+      await loadTeamData();
+    } catch {
+      showToast("error", "Could not revoke invite", "Please try again.");
+    }
+  }
+
+  async function assignClientToManager(clientId: string, accountManagerId: string | null) {
+    if (!firmId || !user) return;
+    try {
+      const res = await fetch("/api/clients/assign", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ clientId, accountManagerId, requestedByUserId: user.id, firmId }),
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        showToast("error", "Could not assign client", data.error || "Unknown error");
+      } else {
+        showToast("success", "Client assigned", accountManagerId ? "Client has been assigned to the selected account manager." : "Client is now unassigned.");
+        await loadSavedData();
+      }
+    } catch (err) {
+      showToast("error", "Could not assign client", err instanceof Error ? err.message : "Unknown error");
+    }
   }
 
   async function saveClientSettings() {
@@ -907,8 +1005,13 @@ export default function VatDashboard() {
               <a href="/" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Back to home">
                 🏠 <span className="hidden sm:inline">Home</span>
               </a>
+              {currentUserRole === "owner" && !selectedClientId && (
+                <button onClick={() => { setShowTeamPanel((s) => !s); loadTeamData(); }} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Manage team">
+                  👥 <span className="hidden sm:inline">Team</span>
+                </button>
+              )}
               {selectedClientId ? (
-                <button onClick={() => setShowClientSettings((s) => !s)} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Client settings">
+                <button onClick={() => { setShowClientSettings((s) => !s); if (currentUserRole === "owner") loadTeamData(); }} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Client settings">
                   ⚙️ <span className="hidden sm:inline">Client Settings</span>
                 </button>
               ) : (
@@ -940,6 +1043,71 @@ export default function VatDashboard() {
             <a href="/billing" className="rounded-xl bg-[#343b46] px-4 py-2 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors whitespace-nowrap ml-4">
               Upgrade now →
             </a>
+          </div>
+        )}
+
+        {/* Team Management panel — owners only */}
+        {showTeamPanel && currentUserRole === "owner" && (
+          <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm border-t-4 border-[#c9af69]">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-lg font-bold text-[#343b46]">Team & Account Managers</h2>
+                <p className="text-sm text-slate-500 mt-1">Invite account managers and assign clients to them. Account managers only see clients assigned to them.</p>
+              </div>
+              <button onClick={() => setShowTeamPanel(false)} className="text-slate-400 hover:text-[#343b46] text-xl leading-none">×</button>
+            </div>
+
+            {/* Invite form */}
+            <div className="rounded-xl bg-[#f2f7f8] p-4 mb-5">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">Invite an account manager</p>
+              <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+                <input type="text" placeholder="Name (optional)" className="rounded-xl border border-slate-200 p-2.5 text-sm focus:border-[#c9af69] focus:outline-none"
+                  value={inviteName} onChange={(e) => setInviteName(e.target.value)} />
+                <input type="email" placeholder="email@example.com" className="rounded-xl border border-slate-200 p-2.5 text-sm focus:border-[#c9af69] focus:outline-none"
+                  value={inviteEmail} onChange={(e) => setInviteEmail(e.target.value)} />
+                <button onClick={inviteTeamMember} disabled={invitingMember}
+                  className="rounded-xl bg-[#343b46] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors disabled:opacity-50 whitespace-nowrap">
+                  {invitingMember ? "Sending..." : "Send invite"}
+                </button>
+              </div>
+            </div>
+
+            {/* Current team */}
+            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Current team</p>
+            <div className="space-y-2 mb-5">
+              {teamMembers.map((member) => (
+                <div key={member.user_id} className="flex items-center justify-between rounded-xl border border-slate-100 p-3">
+                  <div>
+                    <p className="text-sm font-semibold text-[#343b46]">{member.display_name || member.email || "Unnamed"}</p>
+                    <p className="text-xs text-slate-400">{member.email}</p>
+                  </div>
+                  <span className={`rounded-full px-3 py-1 text-xs font-semibold ${member.role === "owner" ? "bg-[#c9af69]/20 text-[#9c8550]" : "bg-blue-50 text-blue-700"}`}>
+                    {member.role === "owner" ? "Owner" : "Account Manager"}
+                  </span>
+                </div>
+              ))}
+              {teamMembers.length === 0 && <p className="text-sm text-slate-400">Loading team...</p>}
+            </div>
+
+            {/* Pending invites */}
+            {pendingInvites.length > 0 && (
+              <>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Pending invites</p>
+                <div className="space-y-2">
+                  {pendingInvites.map((invite) => (
+                    <div key={invite.id} className="flex items-center justify-between rounded-xl border border-dashed border-slate-200 p-3">
+                      <div>
+                        <p className="text-sm font-semibold text-[#343b46]">{invite.display_name || invite.email}</p>
+                        <p className="text-xs text-slate-400">{invite.email} · Invited {new Date(invite.created_at).toLocaleDateString("en-GB")}</p>
+                      </div>
+                      <button onClick={() => revokeInvite(invite.id)} className="text-xs font-semibold text-red-500 hover:text-red-700">
+                        Revoke
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -1193,6 +1361,22 @@ export default function VatDashboard() {
                       value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="e.g. client@example.com" />
                     <p className="text-xs text-slate-400 mt-1">VAT threshold alert emails will be sent to this address.</p>
                   </div>
+                  {currentUserRole === "owner" && (
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Assigned account manager</label>
+                      <select
+                        className="w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:border-[#c9af69] focus:outline-none"
+                        value={savedClients.find((c) => c.id === selectedClientId)?.account_manager_id || ""}
+                        onChange={(e) => assignClientToManager(selectedClientId!, e.target.value || null)}
+                      >
+                        <option value="">Unassigned (owner handles it)</option>
+                        {teamMembers.filter((m) => m.role === "account_manager").map((m) => (
+                          <option key={m.user_id} value={m.user_id}>{m.display_name || m.email}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-slate-400 mt-1">The assigned manager will receive VAT alert emails for this client and will only see this client in their dashboard.</p>
+                    </div>
+                  )}
                 </div>
                 <div className="mt-5 flex items-center gap-3">
                   <button onClick={saveClientSettings} disabled={savingClientSettings}
