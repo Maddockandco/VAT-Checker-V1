@@ -90,8 +90,10 @@ export default function SignupPage() {
       <main className="min-h-screen bg-[#f2f7f8] flex items-center justify-center p-6" style={{ fontFamily: "'Open Sans', sans-serif" }}>
         <div className="w-full max-w-md">
           <div className="rounded-3xl bg-[#343b46] p-8 text-white text-center mb-6">
-            <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-widest mb-2">Maddock & Co.</p>
-            <h1 className="text-3xl font-bold">VAT Checker</h1>
+            <div className="flex items-center justify-center gap-1">
+              <span className="text-[#c9af69] font-bold text-lg">VAT</span>
+              <span className="text-white font-bold text-lg">watchHQ</span>
+            </div>
           </div>
           <div className="rounded-3xl bg-white p-8 shadow-sm text-center">
             <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
@@ -99,12 +101,16 @@ export default function SignupPage() {
             </div>
             <h2 className="text-xl font-bold text-[#343b46] mb-3">Account created!</h2>
             <p className="text-slate-500 text-sm mb-6">
-              Welcome to VAT Checker. Please check your email at <strong>{email}</strong> and click the confirmation link to activate your account.
+              {isInvited
+                ? <>Welcome to VATwatchHQ. Please check your email at <strong>{email}</strong> and click the confirmation link to activate your account and join your team.</>
+                : <>Welcome to VATwatchHQ. Please check your email at <strong>{email}</strong> and click the confirmation link to activate your account.</>}
             </p>
-            <div className="rounded-xl bg-[#f2f7f8] border-l-4 border-[#c9af69] p-4 text-sm text-[#343b46] text-left mb-6">
-              <p className="font-semibold mb-1">Your 30-day free trial starts now</p>
-              <p className="text-slate-500">You have full access to all features for 30 days. No credit card required.</p>
-            </div>
+            {!isInvited && (
+              <div className="rounded-xl bg-[#f2f7f8] border-l-4 border-[#c9af69] p-4 text-sm text-[#343b46] text-left mb-6">
+                <p className="font-semibold mb-1">Your 30-day free trial starts now</p>
+                <p className="text-slate-500">You have full access to all features for 30 days. No credit card required.</p>
+              </div>
+            )}
             <Link href="/dashboard" className="block w-full rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors text-center">
               Go to dashboard →
             </Link>
@@ -120,14 +126,26 @@ export default function SignupPage() {
 
         {/* Header */}
         <div className="rounded-3xl bg-[#343b46] p-8 text-white mb-6">
-          <p className="text-xs text-[#c9af69] font-semibold uppercase tracking-widest mb-2">Maddock & Co.</p>
-          <h1 className="text-3xl font-bold">VAT Checker</h1>
-          <p className="mt-2 text-slate-300 text-sm">Monitor your clients' VAT registration threshold automatically.</p>
-          <div className="mt-4 flex gap-4 text-xs text-slate-300">
-            <span>✓ 30-day free trial</span>
-            <span>✓ No credit card required</span>
-            <span>✓ Xero integration</span>
+          <div className="flex items-center gap-1 mb-2">
+            <span className="text-[#c9af69] font-bold text-lg">VAT</span>
+            <span className="text-white font-bold text-lg">watchHQ</span>
           </div>
+          {isInvited ? (
+            <>
+              <h1 className="text-3xl font-bold">You're invited</h1>
+              <p className="mt-2 text-slate-300 text-sm">Set up your account to join your team on VATwatchHQ.</p>
+            </>
+          ) : (
+            <>
+              <h1 className="text-3xl font-bold">Get started</h1>
+              <p className="mt-2 text-slate-300 text-sm">Monitor your clients' VAT registration threshold automatically.</p>
+              <div className="mt-4 flex gap-4 text-xs text-slate-300 flex-wrap">
+                <span>✓ 30-day free trial</span>
+                <span>✓ No credit card required</span>
+                <span>✓ Xero integration</span>
+              </div>
+            </>
+          )}
         </div>
 
         {/* Form */}
@@ -227,7 +245,7 @@ export default function SignupPage() {
             disabled={saving}
             className="w-full rounded-xl bg-[#343b46] px-4 py-3 font-semibold text-white hover:bg-[#2a303a] transition-colors disabled:opacity-50"
           >
-            {saving ? "Creating account..." : "Start free trial →"}
+            {saving ? "Creating account..." : isInvited ? "Accept invite →" : "Start free trial →"}
           </button>
 
           <p className="mt-4 text-center text-sm text-slate-500">
