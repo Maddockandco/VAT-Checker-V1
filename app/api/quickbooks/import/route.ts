@@ -338,6 +338,25 @@ export async function GET(request: Request) {
       risk_status: riskStatus,
     });
 
+    // Automatically send an alert email right away if the risk warrants it —
+    // same behaviour as Xero, so a fresh QuickBooks connection that's already
+    // close to the threshold doesn't sit silent until the next monthly cron.
+    let autoAlertSent = false;
+    const emailAlertStatuses = ["Watch", "Warning", "High Risk", "Registration Required"];
+    if (emailAlertStatuses.includes(riskStatus)) {
+      try {
+        const alertRes = await fetch(`${process.env.NEXT_PUBLIC_APP_URL || "https://vat.maddockandco.com"}/api/alerts/send`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clientId }),
+        });
+        const alertData = await alertRes.json();
+        autoAlertSent = alertData.ok && alertData.emailsSent?.length > 0;
+      } catch {
+        autoAlertSent = false;
+      }
+    }
+
     return NextResponse.json({
       ok: true,
       clientName: client.name,
@@ -346,6 +365,7 @@ export async function GET(request: Request) {
       linesSkipped: totalLinesSkipped.count,
       rollingTurnover: Number(rollingTurnover.toFixed(2)),
       riskStatus,
+      autoAlertSent,
       monthsFound: turnoverEntries.length,
     });
 
