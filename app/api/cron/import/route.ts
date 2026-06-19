@@ -71,20 +71,9 @@ export async function GET(request: Request) {
         continue;
       }
 
-      // Step 2 — Send alert email if threshold is breached
-      let alertSent = false;
-      const alertStatuses = ["Watch", "Warning", "High Risk", "Registration Required"];
-
-      if (alertStatuses.includes(importData.riskStatus)) {
-        const alertRes = await fetch(`${baseUrl}/api/alerts/send`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ clientId }),
-        });
-
-        const alertData = await alertRes.json();
-        alertSent = alertData.ok && alertData.emailsSent?.length > 0;
-      }
+      // Note: the import route itself now automatically sends the alert email
+      // when risk warrants it, so we just read that result rather than sending again
+      const alertSent = !!importData.autoAlertSent;
 
       results.push({
         clientId,
