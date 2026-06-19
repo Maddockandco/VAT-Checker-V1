@@ -18,6 +18,7 @@ export default function SignupPage() {
   const [step, setStep] = useState<"form" | "success">("form");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [isInvited, setIsInvited] = useState(false);
 
   const [firmName, setFirmName] = useState("");
   const [fullName, setFullName] = useState("");
@@ -26,10 +27,19 @@ export default function SignupPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [agreedToTerms, setAgreedToTerms] = useState(false);
 
+  React.useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const invitedEmail = params.get("invited");
+    if (invitedEmail) {
+      setEmail(invitedEmail);
+      setIsInvited(true);
+    }
+  }, []);
+
   async function handleSignup() {
     setError("");
 
-    if (!firmName.trim()) { setError("Please enter your firm name."); return; }
+    if (!isInvited && !firmName.trim()) { setError("Please enter your firm name."); return; }
     if (!fullName.trim()) { setError("Please enter your full name."); return; }
     if (!email.trim()) { setError("Please enter your email address."); return; }
     if (password.length < 8) { setError("Password must be at least 8 characters."); return; }
@@ -52,12 +62,14 @@ export default function SignupPage() {
       if (!authData.user) throw new Error("Failed to create account.");
 
       // Call our setup API to create firm and link user
+      // (or, if this email has a pending invite, the setup route links them
+      // to the existing firm automatically instead of creating a new one)
       const res = await fetch("/api/signup/setup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           userId: authData.user.id,
-          firmName: firmName.trim(),
+          firmName: firmName.trim() || undefined,
           fullName: fullName.trim(),
           email: email.trim(),
         }),
@@ -122,18 +134,26 @@ export default function SignupPage() {
         <div className="rounded-3xl bg-white p-8 shadow-sm">
           <h2 className="text-lg font-bold text-[#343b46] mb-6">Create your account</h2>
 
-          <div className="mb-4">
-            <label className="block text-sm font-semibold text-[#343b46] mb-1">
-              Firm name <span className="text-red-500">*</span>
-            </label>
-            <input
-              type="text"
-              className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none"
-              placeholder="e.g. Smith & Co. Accountants"
-              value={firmName}
-              onChange={(e) => setFirmName(e.target.value)}
-            />
-          </div>
+          {isInvited && (
+            <div className="mb-5 rounded-xl bg-[#c9af69]/10 border border-[#c9af69]/30 p-3 text-sm text-[#343b46]">
+              🎉 You've been invited to join an existing firm. Just set your name and password below to accept.
+            </div>
+          )}
+
+          {!isInvited && (
+            <div className="mb-4">
+              <label className="block text-sm font-semibold text-[#343b46] mb-1">
+                Firm name <span className="text-red-500">*</span>
+              </label>
+              <input
+                type="text"
+                className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none"
+                placeholder="e.g. Smith & Co. Accountants"
+                value={firmName}
+                onChange={(e) => setFirmName(e.target.value)}
+              />
+            </div>
+          )}
 
           <div className="mb-4">
             <label className="block text-sm font-semibold text-[#343b46] mb-1">
@@ -154,11 +174,13 @@ export default function SignupPage() {
             </label>
             <input
               type="email"
-              className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none"
+              className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none disabled:bg-slate-50 disabled:text-slate-500"
               placeholder="e.g. john@smithco.com"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
+              disabled={isInvited}
             />
+            {isInvited && <p className="text-xs text-slate-400 mt-1">This is the email address your invite was sent to.</p>}
           </div>
 
           <div className="mb-4">
