@@ -22,6 +22,7 @@ type FirmSettings = {
   website: string | null;
   phone: string | null;
   address: string | null;
+  alerts_email: string | null;
   subscription_status: string;
   trial_ends_at: string | null;
 };
@@ -41,6 +42,7 @@ export default function SettingsPage() {
   const [website, setWebsite] = useState("");
   const [phone, setPhone] = useState("");
   const [address, setAddress] = useState("");
+  const [alertsEmail, setAlertsEmail] = useState("");
   const [logoUrl, setLogoUrl] = useState<string | null>(null);
 
   useEffect(() => {
@@ -66,7 +68,7 @@ export default function SettingsPage() {
 
     const { data: firmData } = await supabase
       .from("firms")
-      .select("id,name,logo_url,primary_colour,website,phone,address,subscription_status,trial_ends_at")
+      .select("id,name,logo_url,primary_colour,website,phone,address,alerts_email,subscription_status,trial_ends_at")
       .eq("id", access.firm_id)
       .single();
 
@@ -77,6 +79,7 @@ export default function SettingsPage() {
       setWebsite(firmData.website || "");
       setPhone(firmData.phone || "");
       setAddress(firmData.address || "");
+      setAlertsEmail(firmData.alerts_email || "");
       setLogoUrl(firmData.logo_url || null);
     }
     setLoading(false);
@@ -159,6 +162,7 @@ export default function SettingsPage() {
         website: website.trim() || null,
         phone: phone.trim() || null,
         address: address.trim() || null,
+        alerts_email: alertsEmail.trim() || null,
       })
       .eq("id", firmId);
 
@@ -304,6 +308,20 @@ export default function SettingsPage() {
                 onChange={(e) => setPhone(e.target.value)}
                 placeholder="e.g. 01234 567890"
               />
+            </div>
+            <div>
+              <label className="block text-sm font-semibold text-[#343b46] mb-1">VAT alert reply-to email</label>
+              <input
+                type="email"
+                className="w-full rounded-xl border border-slate-200 p-3 text-sm focus:border-[#c9af69] focus:outline-none"
+                value={alertsEmail}
+                onChange={(e) => setAlertsEmail(e.target.value)}
+                placeholder="e.g. vat-alerts@yourfirm.com"
+              />
+              <p className="text-xs text-slate-400 mt-1">
+                Optional. If your sign-up email isn't the right inbox for VAT alert replies, set a different one here —
+                client and account manager email replies will go to this address instead.
+              </p>
             </div>
             <div>
               <label className="block text-sm font-semibold text-[#343b46] mb-1">Address</label>
