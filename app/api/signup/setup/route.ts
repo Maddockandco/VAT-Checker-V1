@@ -54,12 +54,19 @@ export async function POST(request: Request) {
       .single();
 
     if (invite) {
-      await supabase.from("firm_user_access").insert({
+      const { error: accessError } = await supabase.from("firm_user_access").insert({
         firm_id: invite.firm_id,
         user_id: userId,
         role: invite.role,
         display_name: invite.display_name || fullName,
       });
+
+      if (accessError) {
+        return NextResponse.json(
+          { error: `Failed to link account to firm: ${accessError.message}` },
+          { status: 500 }
+        );
+      }
 
       await supabase
         .from("firm_invites")
