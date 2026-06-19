@@ -330,7 +330,13 @@ export default function VatDashboard() {
         return;
       }
       setMessage(`Xero import complete. Rolling turnover: £${Number(data.rollingTurnover || 0).toLocaleString()}`);
-      showToast("success", "Import complete", `Rolling turnover updated to £${Number(data.rollingTurnover || 0).toLocaleString()}.`);
+      showToast(
+        "success",
+        "Import complete",
+        data.autoAlertSent
+          ? `Rolling turnover updated to £${Number(data.rollingTurnover || 0).toLocaleString()}. A VAT alert email has been sent — ${data.riskStatus}.`
+          : `Rolling turnover updated to £${Number(data.rollingTurnover || 0).toLocaleString()}.`
+      );
       await loadSavedData();
       const currentClient = savedClients.find((c) => c.id === selectedClientId);
       if (currentClient) await openClient(currentClient);
@@ -365,7 +371,13 @@ export default function VatDashboard() {
         return;
       }
       setMessage(`QuickBooks import complete. Rolling turnover: £${Number(data.rollingTurnover || 0).toLocaleString()}`);
-      showToast("success", "Import complete", `Rolling turnover updated to £${Number(data.rollingTurnover || 0).toLocaleString()}.`);
+      showToast(
+        "success",
+        "Import complete",
+        data.autoAlertSent
+          ? `Rolling turnover updated to £${Number(data.rollingTurnover || 0).toLocaleString()}. A VAT alert email has been sent — ${data.riskStatus}.`
+          : `Rolling turnover updated to £${Number(data.rollingTurnover || 0).toLocaleString()}.`
+      );
       await loadSavedData();
       const currentClient = savedClients.find((c) => c.id === selectedClientId);
       if (currentClient) await openClient(currentClient);
