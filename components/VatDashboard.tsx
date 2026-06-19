@@ -36,6 +36,8 @@ type SavedClient = {
   name: string;
   sector: string | null;
   firm_id: string | null;
+  email: string | null;
+  contact_name: string | null;
   created_at: string;
 };
 
@@ -91,6 +93,10 @@ export default function VatDashboard() {
   const [firmName, setFirmName] = useState("Maddock & Co.");
   const [clientName, setClientName] = useState("");
   const [sector, setSector] = useState("");
+  const [clientContactName, setClientContactName] = useState("");
+  const [clientEmail, setClientEmail] = useState("");
+  const [showClientSettings, setShowClientSettings] = useState(false);
+  const [savingClientSettings, setSavingClientSettings] = useState(false);
   const [selectedClientId, setSelectedClientId] = useState<string | null>(null);
   const [expectedNext30Days, setExpectedNext30Days] = useState(0);
 
@@ -230,7 +236,7 @@ export default function VatDashboard() {
 
     const { data: clients } = await supabase
       .from("clients")
-      .select("id,name,sector,firm_id,created_at")
+      .select("id,name,sector,firm_id,email,contact_name,created_at")
       .eq("firm_id", firmId)
       .eq("archived", false)
       .order("created_at", { ascending: false });
@@ -262,6 +268,9 @@ export default function VatDashboard() {
     setSelectedClientId(client.id);
     setClientName(client.name);
     setSector(client.sector || "");
+    setClientContactName(client.contact_name || "");
+    setClientEmail(client.email || "");
+    setShowClientSettings(false);
     setMessage("");
     // Persist client in URL so page refresh keeps you on the same client
     window.history.replaceState({}, "", `/dashboard?client=${client.id}`);
@@ -601,6 +610,34 @@ export default function VatDashboard() {
     setNewClientSaving(false);
   }
 
+  async function saveClientSettings() {
+    if (!supabase || !selectedClientId) return;
+    if (!clientName.trim()) { showToast("error", "Client name required", "Please enter a client name before saving."); return; }
+
+    setSavingClientSettings(true);
+    try {
+      const { error } = await supabase
+        .from("clients")
+        .update({
+          name: clientName.trim(),
+          sector: sector.trim() || null,
+          contact_name: clientContactName.trim() || null,
+          email: clientEmail.trim() || null,
+        })
+        .eq("id", selectedClientId);
+
+      if (error) {
+        showToast("error", "Could not save", error.message);
+      } else {
+        showToast("success", "Client settings saved", `Details for ${clientName.trim()} have been updated.`);
+        await loadSavedData();
+      }
+    } catch (err) {
+      showToast("error", "Could not save", err instanceof Error ? err.message : "Unknown error");
+    }
+    setSavingClientSettings(false);
+  }
+
   async function saveAll() {
     setMessage("");
     if (!supabase) { setMessage("Supabase not connected."); return; }
@@ -870,9 +907,15 @@ export default function VatDashboard() {
               <a href="/" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Back to home">
                 🏠 <span className="hidden sm:inline">Home</span>
               </a>
-              <a href="/settings" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Firm settings">
-                ⚙️ <span className="hidden sm:inline">Settings</span>
-              </a>
+              {selectedClientId ? (
+                <button onClick={() => setShowClientSettings((s) => !s)} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Client settings">
+                  ⚙️ <span className="hidden sm:inline">Client Settings</span>
+                </button>
+              ) : (
+                <a href="/settings" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Firm settings">
+                  ⚙️ <span className="hidden sm:inline">Settings</span>
+                </a>
+              )}
               <a href="/billing" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Billing & plans">
                 💳 <span className="hidden sm:inline">Billing</span>
               </a>
@@ -1118,6 +1161,65 @@ export default function VatDashboard() {
         {/* CLIENT DETAIL VIEW */}
         {selectedClientId && (
           <>
+            {/* Client Settings panel — toggled via the Settings button above */}
+            {showClientSettings && (
+              <div className="mb-6 rounded-2xl bg-white p-6 shadow-sm border-t-4 border-[#c9af69]">
+                <div className="flex items-center justify-between mb-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-[#343b46]">Client Settings</h2>
+                    <p className="text-sm text-slate-500 mt-1">Edit this client's details. These settings only apply to {clientName}.</p>
+                  </div>
+                  <button onClick={() => setShowClientSettings(false)} className="text-slate-400 hover:text-[#343b46] text-xl leading-none">×</button>
+                </div>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Client / Business name</label>
+                    <input type="text" className="w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:border-[#c9af69] focus:outline-none"
+                      value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="e.g. Tangerine Trees Ltd" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Sector</label>
+                    <input type="text" className="w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:border-[#c9af69] focus:outline-none"
+                      value={sector} onChange={(e) => setSector(e.target.value)} placeholder="e.g. Hospitality, Retail, Construction" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Contact name</label>
+                    <input type="text" className="w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:border-[#c9af69] focus:outline-none"
+                      value={clientContactName} onChange={(e) => setClientContactName(e.target.value)} placeholder="e.g. John Smith" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">Contact email</label>
+                    <input type="email" className="w-full rounded-xl border border-slate-200 p-2.5 text-sm focus:border-[#c9af69] focus:outline-none"
+                      value={clientEmail} onChange={(e) => setClientEmail(e.target.value)} placeholder="e.g. client@example.com" />
+                    <p className="text-xs text-slate-400 mt-1">VAT threshold alert emails will be sent to this address.</p>
+                  </div>
+                </div>
+                <div className="mt-5 flex items-center gap-3">
+                  <button onClick={saveClientSettings} disabled={savingClientSettings}
+                    className="rounded-xl bg-[#343b46] px-5 py-2.5 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors disabled:opacity-50">
+                    {savingClientSettings ? "Saving..." : "Save client settings"}
+                  </button>
+                  <button onClick={() => setShowClientSettings(false)} className="rounded-xl border border-slate-200 px-5 py-2.5 text-sm font-semibold text-slate-600 hover:bg-slate-50 transition-colors">
+                    Cancel
+                  </button>
+                </div>
+
+                <div className="mt-6 pt-5 border-t border-slate-100">
+                  <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-3">Danger zone</p>
+                  <div className="flex gap-2 flex-wrap">
+                    <button onClick={() => setShowArchiveConfirm(true)}
+                      className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-2 text-sm font-semibold text-amber-700 hover:bg-amber-100 transition-colors">
+                      📦 Archive client
+                    </button>
+                    <button onClick={() => setShowDeleteConfirm(true)}
+                      className="rounded-xl border border-red-300 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100 transition-colors">
+                      🗑️ Delete client
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             <div className="mb-6 grid gap-4 md:grid-cols-5">
               <div className="rounded-xl bg-white p-4 shadow-sm border-t-4 border-[#c9af69]">
                 <p className="text-xs text-slate-400 uppercase tracking-wide">Rolling taxable turnover</p>
