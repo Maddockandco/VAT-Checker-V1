@@ -35,17 +35,20 @@ export default function ResetPasswordPage() {
     if (!supabase) { setError("Connection error. Please refresh and try again."); return; }
     setLoading(true); setError("");
     try {
-      const { error: err } = await supabase.auth.resetPasswordForEmail(email.trim(), {
+      const result = await supabase.auth.resetPasswordForEmail(email.trim(), {
         redirectTo: `${window.location.origin}/reset-password`,
       });
+      console.log("DEBUG resetPasswordForEmail result:", JSON.stringify(result));
+      const err = result.error;
       if (err) {
-        setError(typeof err.message === "string" && err.message ? err.message : "Could not send reset link. Please check the email address and try again.");
+        const debugInfo = `[DEBUG] name=${(err as any)?.name} status=${(err as any)?.status} message=${(err as any)?.message} raw=${JSON.stringify(err)}`;
+        setError(debugInfo);
       } else {
         setMessage("Check your email for a password reset link.");
         setMode("done");
       }
     } catch (unexpectedError) {
-      setError(unexpectedError instanceof Error ? unexpectedError.message : "Something went wrong. Please try again.");
+      setError(`[DEBUG catch] ${JSON.stringify(unexpectedError, Object.getOwnPropertyNames(unexpectedError as object))}`);
     }
     setLoading(false);
   }
