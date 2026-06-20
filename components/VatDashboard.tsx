@@ -826,10 +826,16 @@ export default function VatDashboard() {
               <span className="text-3xl">⏰</span>
             </div>
             <h2 className="text-xl font-bold text-[#343b46] mb-3">Your free trial has ended</h2>
-            <p className="text-slate-500 text-sm mb-6">Subscribe to continue monitoring your clients' VAT threshold positions and keep access to all your data.</p>
-            <a href="/billing" className="block w-full rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors text-center mb-3">
-              View plans & subscribe →
-            </a>
+            <p className="text-slate-500 text-sm mb-6">
+              {currentUserRole === "owner"
+                ? "Subscribe to continue monitoring your clients' VAT threshold positions and keep access to all your data."
+                : "Your firm's free trial has ended. Please contact your firm owner to subscribe and restore access."}
+            </p>
+            {currentUserRole === "owner" && (
+              <a href="/billing" className="block w-full rounded-xl bg-[#343b46] px-4 py-3 text-sm font-semibold text-white hover:bg-[#2a303a] transition-colors text-center mb-3">
+                View plans & subscribe →
+              </a>
+            )}
             <button onClick={signOut} className="w-full rounded-xl border border-slate-200 px-4 py-3 text-sm font-semibold text-slate-500 hover:bg-slate-50 transition-colors">
               Sign out
             </button>
@@ -1014,14 +1020,16 @@ export default function VatDashboard() {
                 <button onClick={() => { setShowClientSettings((s) => !s); if (currentUserRole === "owner") loadTeamData(); }} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Client settings">
                   ⚙️ <span className="hidden sm:inline">Client Settings</span>
                 </button>
-              ) : (
+              ) : currentUserRole === "owner" ? (
                 <a href="/settings" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Firm settings">
                   ⚙️ <span className="hidden sm:inline">Settings</span>
                 </a>
+              ) : null}
+              {currentUserRole === "owner" && (
+                <a href="/billing" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Billing & plans">
+                  💳 <span className="hidden sm:inline">Billing</span>
+                </a>
               )}
-              <a href="/billing" className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Billing & plans">
-                💳 <span className="hidden sm:inline">Billing</span>
-              </a>
               <button onClick={signOut} className="rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/20 transition-colors" title="Sign out">
                 Sign out
               </button>
